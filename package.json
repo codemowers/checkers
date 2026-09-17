@@ -1,0 +1,33 @@
+{
+  "name": "checkers",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start -p ${PORT:-3000}",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "textures": "mkdir -p public/textures && curl -fsSL https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_table_001/wood_table_001_diff_1k.jpg -o public/textures/wood-table-001.jpg"
+  },
+  "dependencies": {
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.17.14",
+    "ioredis": "^5.4.2",
+    "next": "14.2.35",
+    "next-auth": "^4.24.15",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "three": "^0.172.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^18.3.18",
+    "@types/three": "^0.172.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "overrides": {
+    "three-mesh-bvh": "^0.8.0"
+  }
+}

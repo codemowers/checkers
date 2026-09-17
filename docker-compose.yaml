@@ -1,0 +1,30 @@
+services:
+  checkers-redis:
+    image: redis:7.4-alpine
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 3s
+      timeout: 2s
+      retries: 15
+
+  web:
+    build:
+      context: .
+      target: development
+    user: "1001:1001"
+    ports:
+      - "3001:3001"
+    tmpfs:
+      - /app/.next:uid=1001,gid=1001,mode=0755
+    depends_on:
+      checkers-redis:
+        condition: service_healthy

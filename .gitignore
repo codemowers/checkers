@@ -1,0 +1,14 @@
+.next/
+node_modules/
+*.tsbuildinfo
+.env*
+!.env.example
+npm-debug.log*
+
+# Downloaded at build time, see the assets stage in the Dockerfile
+/public/textures/
+
+# Editor swap files
+*.swp
+*.swo
+*~

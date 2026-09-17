@@ -1,0 +1,7 @@
+.git
+.next
+node_modules
+npm-debug.log
+chart
+# Always taken from the assets stage, never from the developer's working copy
+public/textures

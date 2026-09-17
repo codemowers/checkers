@@ -1,0 +1,21 @@
+apiVersion: codemowers.cloud/v1
+kind: OIDCClient
+metadata:
+  name: checkers
+spec:
+  displayName: Checkers
+  applicationType: web
+  grantTypes:
+    - authorization_code
+    - refresh_token
+  responseTypes:
+    - code
+  tokenEndpointAuthMethod: client_secret_basic
+  pkce: true
+  redirectUris:
+    - https://{{ .Values.domain }}/api/auth/callback/passmower
+  uri: https://{{ .Values.domain }}/
+  availableScopes:
+    - openid
+    - profile
+    - email
