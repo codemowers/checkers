@@ -1,8 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { hasCapture } from "../lib/rules";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toPublicGame } from "../lib/public-game";
+import { applyMove, hasCapture, newGame } from "../lib/rules";
 import type { GameEvent, Move, PublicGame } from "../lib/types";
 
 const Board = dynamic(() => import("./webgl-board"), { ssr: false, loading: () => <div className="board-loading">Setting the table…</div> });
@@ -40,10 +41,24 @@ export default function GameRoom({ initialGameId, playerName, anonymous, selfPla
   const [anonymousName, setAnonymousName] = useState("");
   const [draftName, setDraftName] = useState("");
   const [nameLoaded, setNameLoaded] = useState(!anonymous);
+  const [opening, setOpening] = useState<Move>();
+  const openingPlayed = useRef(false);
+  const openingDropped = useRef(false);
   const instanceId = useRef<string>();
   const nameInput = useRef<HTMLInputElement>(null);
   const displayName = anonymous ? anonymousName : playerName ?? "Player";
-  const player = game?.you;
+
+  /**
+   * The table you sit at while nobody has arrived yet. Matchmaking always seats
+   * whoever waits as red, and red moves first, so an opening picked here is
+   * still legal — and still yours to play — the moment an opponent shows up.
+   */
+  const preview = useMemo(() => {
+    const table = newGame("opening-preview");
+    table.players = [{ id: "", name: displayName || "You" }, { id: "", name: "Opponent" }];
+    try { return toPublicGame(opening ? applyMove(table, 0, opening) : table, 0); }
+    catch { return toPublicGame(table, 0); }
+  }, [displayName, opening]);
 
   useEffect(() => {
     if (!anonymous) return;
@@ -157,13 +172,24 @@ export default function GameRoom({ initialGameId, playerName, anonymous, selfPla
     } finally { setMoving(false); }
   }, [game, moving, headers]);
 
+  /** Hand the opening over as soon as the seat it was chosen for is confirmed. */
+  useEffect(() => {
+    if (!game || !opening || openingPlayed.current) return;
+    openingPlayed.current = true;
+    setOpening(undefined);
+    if (game.you === 0 && game.status === "playing" && game.turn === 0 && game.revision === 1) void move(opening);
+    else openingDropped.current = true;
+  }, [game, move, opening]);
+
   useEffect(() => {
     if (!game) return;
+    if (game.revision > 1) openingDropped.current = false;
     const you = game.you;
     if (game.status === "finished") {
       if (game.winner == null) setMessage("A draw — neither side made progress.");
       else setMessage(game.winner === you ? "You won. Nicely played." : `${game.players[game.winner].name} won this round.`);
     }
+    else if (openingDropped.current && game.revision === 1) setMessage(`You drew black, so your opening was set aside — ${game.players[game.turn].name} opens.`);
     else if (game.forced && game.turn === you) setMessage("Keep jumping — another capture is open.");
     else if (game.turn === you && hasCapture(game, you)) setMessage("A capture is required. Use a ringed piece.");
     else if (game.turn === you && !hasMoved) setMessage("Your turn — drag a piece, or tap it then choose a highlighted square.");
@@ -185,6 +211,9 @@ export default function GameRoom({ initialGameId, playerName, anonymous, selfPla
     history.replaceState(null, "", "/");
     setGame(undefined);
     setGameId(undefined);
+    setOpening(undefined);
+    openingPlayed.current = false;
+    openingDropped.current = false;
     setMessage("Taking a seat at the next open table…");
     setMatchmaking(true);
   };
@@ -200,10 +229,12 @@ export default function GameRoom({ initialGameId, playerName, anonymous, selfPla
   };
 
   const turnClass = game?.status === "playing" ? (game.turn === game.you ? "your-turn" : "opponent-turn") : "";
+  // Also true behind the name prompt, where the lit table makes a better backdrop than a placeholder.
+  const waitingForOpponent = matchmaking && !gameId;
 
   return <main className={turnClass}>
     <header>
-      <a className="brand" href="https://codemowers.io" target="_blank" rel="noreferrer" aria-label="Checkers by Codemowers"><span className="brand-mark">◆</span><span>CHECKERS <small>BY CODEMOWERS</small></span></a>
+      <a className="brand" href="https://github.com/codemowers/checkers" target="_blank" rel="noreferrer" draggable={false} aria-label="Checkers by Codemowers on GitHub"><span className="brand-mark">◆</span><span>CHECKERS <small>BY CODEMOWERS</small></span></a>
       {game
         ? <MatchScore game={game} displayName={displayName} />
         : <div className="identity"><span className="online-dot" />{displayName || "Anonymous player"}</div>}
@@ -214,15 +245,27 @@ export default function GameRoom({ initialGameId, playerName, anonymous, selfPla
       <div className="table-wrap">
         {game
           ? <Board game={game} player={game.you} onMove={move} disabled={moving} />
-          : matchmaking || gameId
-            ? <WaitingTable seated={!!gameId} showSelfPlayHint={selfPlayEnabled && !gameId} />
-            : <EndedTable message={message} onRestart={participate} />}
+          : waitingForOpponent
+            ? <Board game={preview} player={0} onMove={setOpening} disabled={!!opening} />
+            : gameId
+              ? <WaitingTable />
+              : <EndedTable message={message} onRestart={participate} />}
       </div>
     </section>
 
     {game && <div className="status-card bottom-status">
       <p aria-live="polite">{message}</p>
       {game.status === "finished" && <button onClick={participate}>Participate again</button>}
+    </div>}
+
+    {waitingForOpponent && <div className="status-card bottom-status waiting-card">
+      <p aria-live="polite">{opening
+        ? "Opening move set. It plays the moment somebody sits down."
+        : "Waiting for an opponent — you have red, so open whenever you like."}</p>
+      {opening
+        ? <button className="quit" onClick={() => setOpening(undefined)}>Take it back</button>
+        : selfPlayEnabled && <small>Or open a second tab to play both sides.</small>}
+      <span className="loader" />
     </div>}
 
     {anonymous && nameLoaded && !anonymousName && <div className="name-overlay">
@@ -234,7 +277,6 @@ export default function GameRoom({ initialGameId, playerName, anonymous, selfPla
       </form>
     </div>}
 
-    <footer><a href="https://github.com/codemowers/checkers" target="_blank" rel="noreferrer">github.com/codemowers/checkers</a></footer>
   </main>;
 }
 
@@ -260,12 +302,11 @@ function MatchScore({ game, displayName }: { game: PublicGame; displayName: stri
   </div>;
 }
 
-function WaitingTable({ seated, showSelfPlayHint }: { seated: boolean; showSelfPlayHint: boolean }) {
+function WaitingTable() {
   return <div className="waiting">
     <div className="pieces"><i /><i /></div>
-    <h2>{seated ? "Setting the table" : "Waiting for an opponent"}</h2>
-    <p>{seated ? "Your match is ready." : "We’ll seat the next player who arrives."}</p>
-    {showSelfPlayHint && <small>Open a second tab to play both sides.</small>}
+    <h2>Setting the table</h2>
+    <p>Your match is ready.</p>
     <span className="loader" />
   </div>;
 }

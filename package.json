@@ -13,6 +13,7 @@
   "dependencies": {
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.17.14",
+    "@react-three/postprocessing": "^2.19.1",
     "ioredis": "^5.4.2",
     "next": "14.2.35",
     "next-auth": "^4.24.15",
