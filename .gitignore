@@ -3,6 +3,7 @@ node_modules/
 *.tsbuildinfo
 .env*
 !.env.example
+skaffold.env
 npm-debug.log*
 
 # Downloaded at build time, see the assets stage in the Dockerfile

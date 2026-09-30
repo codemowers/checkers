@@ -29,7 +29,7 @@ let certificate = certFile ? readCertificate() : undefined;
 const server = certificate ? https.createServer(certificate) : http.createServer();
 let ready = false;
 let draining = false;
-const metricsServer = createInternalServer({ certificate, isReady: () => ready && !draining, collectSessions });
+const metricsServer = createInternalServer({ isReady: () => ready && !draining, collectSessions });
 metricsServer.listen(Number(process.env.METRICS_PORT ?? 3002), hostname);
 const { requestHandler: handleRequest, upgradeHandler: handleUpgrade } = await getRequestHandlers({ dir, port, hostname, server, isDev: false, experimentalHttpsServer: !!certificate });
 server.on('request', (request, response) => {
@@ -38,12 +38,11 @@ server.on('request', (request, response) => {
   void handleRequest(request, response);
 });
 server.on('upgrade', (request, socket, head) => { void handleUpgrade(request, socket, head); });
-// Kubernetes projects renewed Secrets atomically. Reload both files from the same projection.
+// Kubernetes projects renewed Secrets atomically. Reload the public listener certificate from the same projection.
 const renewal = certificate ? setInterval(() => {
   const next = readCertificate();
   if (!next.cert.equals(certificate.cert) || !next.key.equals(certificate.key)) {
     server.setSecureContext(next);
-    metricsServer.setSecureContext(next);
     certificate = next;
     console.info('Reloaded HTTPS certificate');
   }

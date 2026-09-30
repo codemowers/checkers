@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
 
 const origin = `${process.env.SMOKE_SCHEME}://127.0.0.1:3001`;
-const internal = `${process.env.SMOKE_SCHEME}://127.0.0.1:3002`;
+const internal = "http://127.0.0.1:3002";
 assert.equal((await fetch(origin)).status, 200);
 for (const path of ['/metrics', '/api/health', '/health', '/ready']) {
   assert.equal((await fetch(origin + path)).status, 404, path);

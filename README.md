@@ -25,8 +25,8 @@ Read at startup; restart after changing configuration. Feature switches accept `
 | `REDIS_URL` | `redis://checkers-redis:6379/0` | Game storage and pub/sub URL. |
 | `REDIS_PASSWORD` | Unset | Separate Redis password. |
 | `PORT`, `HOSTNAME` | `3000`, `::` | Public listener; Docker sets port `3001`. |
-| `METRICS_PORT` | `3002` | Internal listener: `/metrics`, `/health`, `/ready`. |
-| `TLS_CERT_FILE`, `TLS_KEY_FILE` | Unset | Set both PEM paths to enable HTTPS on both production listeners. |
+| `METRICS_PORT` | `3002` | Internal HTTP listener: `/metrics`, `/health`, `/ready`. |
+| `TLS_CERT_FILE`, `TLS_KEY_FILE` | Unset | Set both PEM paths to enable HTTPS on the public listener; metrics and health always use HTTP. |
 | `NODE_EXTRA_CA_CERTS` | Unset | CA bundle for internal TLS. |
 | `TEST_REDIS_URL` | Unset | Disposable Redis/Dragonfly URL; enables storage integration tests. |
 

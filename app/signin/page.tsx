@@ -6,5 +6,5 @@ export const dynamic = "force-dynamic";
 
 export default function Page() {
   if (authMode() === "anon") redirect("/");
-  return <SignIn />;
+  return <SignIn providerName={process.env.OIDC_IDP_DISPLAY_NAME || "OpenID"} />;
 }

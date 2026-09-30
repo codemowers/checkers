@@ -1,9 +1,8 @@
 import http from 'node:http';
-import https from 'node:https';
 import { renderSessions } from './metrics.mjs';
 
-export function createInternalServer({ certificate, isReady, collectSessions }) {
-  const server = certificate ? https.createServer(certificate) : http.createServer();
+export function createInternalServer({ isReady, collectSessions }) {
+  const server = http.createServer();
   server.on('request', (request, response) => {
     if (request.url === '/health' || request.url === '/ready') {
       response.writeHead(isReady() ? 200 : 503, { 'Content-Type': 'application/json' });

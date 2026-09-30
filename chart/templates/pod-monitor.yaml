@@ -9,10 +9,4 @@ spec:
       app: checkers-web
   podMetricsEndpoints:
     - port: metrics
-      tlsConfig:
-        serverName: checkers-web.{{ .Release.Namespace }}
-        ca:
-          configMap:
-            name: cluster-ca-certs
-            key: ca.crt
 {{- end }}

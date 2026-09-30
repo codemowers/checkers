@@ -43,6 +43,11 @@ spec:
             - name: {{ $name }}
               value: {{ $value | quote }}
             {{- end }}
+            - name: OIDC_IDP_DISPLAY_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: oidc-client-checkers-owner-secrets
+                  key: OIDC_IDP_DISPLAY_NAME
             - name: OIDC_ISSUER
               valueFrom:
                 secretKeyRef:
@@ -81,7 +86,7 @@ spec:
               value: /var/run/tls/tls.key
           readinessProbe:
             httpGet:
-              scheme: HTTPS
+              scheme: HTTP
               path: /ready
               port: metrics
             initialDelaySeconds: 3

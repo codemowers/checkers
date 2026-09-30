@@ -20,7 +20,7 @@ export const authOptions: NextAuthOptions = {
   },
   providers: [{
     id: "passmower",
-    name: "Passmower",
+    name: process.env.OIDC_IDP_DISPLAY_NAME || "OpenID",
     type: "oauth",
     wellKnown: `${(process.env.OIDC_ISSUER ?? "").replace(/\/?$/, "/")}.well-known/openid-configuration`,
     clientId: process.env.OIDC_CLIENT_ID!,
