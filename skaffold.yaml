@@ -10,26 +10,15 @@ build:
   artifacts:
     - image: zot.ee-lte-1.codemowers.io/laurivosandi/checkers
       context: .
-      docker:
-        dockerfile: Dockerfile
 deploy:
+  kubeContext: admin@ee-lte-1.codemowers.io
   helm:
     releases:
       - name: checkers
         chartPath: chart
-        namespace: checkers
-        createNamespace: true
-        valuesFiles:
-          - chart/values.yaml
-        # The chart defaults to the public ghcr image; dev builds come from zot,
-        # which is private and needs its pull secret.
+        namespace: demo
         setValues:
           imagePullSecret: zot-pull-secret
+          env.AUTH_MODE: optional
         setValueTemplates:
           image: "{{.IMAGE_FULLY_QUALIFIED_zot_ee_lte_1_codemowers_io_laurivosandi_checkers}}"
-portForward:
-  - resourceType: service
-    resourceName: checkers-web
-    namespace: checkers
-    port: 3000
-    localPort: 3000

@@ -12,12 +12,12 @@ spec:
       labels:
         app: checkers-web
     spec:
+      terminationGracePeriodSeconds: 30
       {{- with .Values.imagePullSecret }}
       imagePullSecrets:
         - name: {{ . | quote }}
       {{- end }}
       securityContext:
-        runAsNonRoot: true
         runAsUser: 1001
         runAsGroup: 1001
         seccompProfile:
@@ -29,7 +29,6 @@ spec:
           image: {{ .Values.image | default "ghcr.io/codemowers/checkers:latest" | quote }}
           imagePullPolicy: Always
           securityContext:
-            allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop:
@@ -37,14 +36,23 @@ spec:
           ports:
             - name: http
               containerPort: 3001
+            - name: metrics
+              containerPort: 3002
           env:
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
             - name: OIDC_ISSUER
               valueFrom:
                 secretKeyRef:
                   name: oidc-client-checkers-owner-secrets
                   key: OIDC_IDP_URI
             - name: NEXTAUTH_URL
-              value: https://{{ .Values.domain }}
+              valueFrom:
+                secretKeyRef:
+                  name: oidc-client-checkers-owner-secrets
+                  key: OIDC_CLIENT_ORIGIN
             - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
@@ -61,12 +69,28 @@ spec:
                   name: checkers-nextauth
                   key: secret
             - name: REDIS_URL
-              value: redis://checkers-redis:6379/0
+              value: rediss://checkers-redis.{{ .Release.Namespace }}:6379/0
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: checkers-redis-auth
+                  key: password
+            - name: TLS_CERT_FILE
+              value: /var/run/tls/tls.crt
+            - name: TLS_KEY_FILE
+              value: /var/run/tls/tls.key
           readinessProbe:
             httpGet:
-              path: /api/health
-              port: http
+              scheme: HTTPS
+              path: /ready
+              port: metrics
             initialDelaySeconds: 3
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 50m
@@ -74,3 +98,10 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+      volumes:
+        - name: tls
+          secret:
+            secretName: checkers-web-internal-tls
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

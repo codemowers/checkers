@@ -1,0 +1,18 @@
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor" }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: checkers
+spec:
+  selector:
+    matchLabels:
+      app: checkers-web
+  podMetricsEndpoints:
+    - port: metrics
+      tlsConfig:
+        serverName: checkers-web.{{ .Release.Namespace }}
+        ca:
+          configMap:
+            name: cluster-ca-certs
+            key: ca.crt
+{{- end }}

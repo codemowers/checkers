@@ -18,3 +18,5 @@ spec:
                   name: http
   tls:
     - secretName: checkers-tls
+      hosts:
+        - {{ .Values.domain | quote }}

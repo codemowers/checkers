@@ -5,14 +5,8 @@ const callbackUrl = `${process.env.NEXTAUTH_URL}/api/auth/callback/passmower`;
 const gravatar = (email?: string | null) => email ? `https://www.gravatar.com/avatar/${createHash("md5").update(email.trim().toLowerCase()).digest("hex")}?d=identicon&s=160` : undefined;
 
 // The id_token was already verified by the OAuth flow; this only unpacks it.
-// A failure here yields a claimless session, which the API sees as a 401 loop,
-// so it must be loud rather than silent.
 function claims(idToken: string) {
-  try { return JSON.parse(Buffer.from(idToken.split(".")[1], "base64url").toString("utf8")); }
-  catch (error) {
-    console.error("Could not decode the id_token payload:", error);
-    return {};
-  }
+  return JSON.parse(Buffer.from(idToken.split(".")[1], "base64url").toString("utf8"));
 }
 
 export const authOptions: NextAuthOptions = {

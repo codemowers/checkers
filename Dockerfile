@@ -5,6 +5,7 @@ RUN wget -q -O wood-table-001.jpg https://dl.polyhaven.org/file/ph-assets/Textur
  && echo "460dd08d240f4a1f02982415048c3c5c200f385db212da18dc7e2df68bf4d0be  wood-table-001.jpg" | sha256sum -c -
 
 FROM node:26-alpine AS base
+RUN apk upgrade --no-cache
 ENV PORT=3001 \
     HOSTNAME=::
 WORKDIR /app
@@ -14,13 +15,23 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM dependencies AS development
-COPY . .
+COPY package.json package-lock.json next.config.js next-env.d.ts tsconfig.json middleware.ts ./
+COPY app ./app
+COPY lib ./lib
+COPY runtime ./runtime
+RUN chmod -R 0755 ./runtime && chmod a+w next-env.d.ts
+COPY scripts ./scripts
 COPY --from=assets /assets/ ./public/textures/
-CMD ["npm", "run", "dev"]
+CMD ["node", "runtime/dev.mjs"]
 
 FROM base AS build
 COPY --from=dependencies /app/node_modules ./node_modules
-COPY . .
+COPY package.json package-lock.json next.config.js next-env.d.ts tsconfig.json middleware.ts ./
+COPY app ./app
+COPY lib ./lib
+COPY runtime ./runtime
+RUN chmod -R 0755 ./runtime
+COPY scripts ./scripts
 COPY --from=assets /assets/ ./public/textures/
 RUN npm run build
 
@@ -29,4 +40,6 @@ ENV NODE_ENV=production
 COPY --from=build /app/public ./public
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
-CMD ["node", "server.js"]
+COPY runtime ./runtime
+RUN chmod -R 0755 ./runtime
+CMD ["node", "runtime/server.mjs"]

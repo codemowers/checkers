@@ -3,7 +3,6 @@ kind: Certificate
 metadata:
   name: checkers
 spec:
-  secretName: checkers-tls
   dnsNames:
     - {{ .Values.domain | quote }}
   issuerRef:

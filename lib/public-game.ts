@@ -5,7 +5,8 @@ import type { Game, PublicGame } from "./types";
  * the only credential a seat has, so handing it to the opponent would let them
  * move and resign on your behalf.
  */
-export function toPublicGame(game: Game, you: 0 | 1): PublicGame {
+export function toPublicGame(game: Game, you: 0 | 1 | null): PublicGame {
   const { players, ...rest } = game;
-  return { ...rest, players: [{ name: players[0].name }, { name: players[1].name }], you };
+  const publicPlayer = ({ id, name, avatar }: Game["players"][number]) => ({ name, ...(avatar ? { avatar } : {}), anonymous: id.startsWith("anon:"), computer: id.startsWith("computer:") });
+  return { ...rest, players: [publicPlayer(players[0]), publicPlayer(players[1])], you };
 }

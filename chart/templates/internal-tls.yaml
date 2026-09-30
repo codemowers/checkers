@@ -1,0 +1,23 @@
+{{- range $service := list "checkers-web" "checkers-redis" }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $service }}
+spec:
+  dnsNames:
+    - {{ $service }}
+  issuerRef:
+    name: cluster-tls-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+{{- end }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: checkers
+spec:
+  serverName: checkers-web.{{ .Release.Namespace }}
+  rootCAsSecrets:
+    - checkers-web-internal-tls

@@ -1,41 +1,43 @@
 # Checkers
 
-A tablet-friendly, WebGL checkers table for two automatically matched players. The application is a single Next.js service: React Three Fiber renders the table, Next.js handles the API and authentication through [Passmower](https://github.com/passmower/passmower), and operator-managed Dragonfly stores matchmaking and authoritative game state.
+WebGL checkers with English (8×8) and International (10×10) rules, computer play, shared games and spectators. Next.js serves the UI, API and Passmower login; Redis/Dragonfly stores games.
 
-## What it does
-
-- Seats players in arrival order—no rooms or invitation codes.
-- Can give every browser tab its own seat when `ALLOW_SELF_PLAY=true`; anonymous mode does this automatically.
-- Supports mouse, pen, and touch drag/drop plus tap-to-move.
-- Enforces turns, mandatory captures, chained jumps, promotion, and wins on the server. Men move and capture forwards only, crowning ends the turn, and 80 plies without a capture or a man move is a draw.
-- Keeps player identifiers server-side. In anonymous mode the per-tab identifier is the seat's only credential, so it is never sent to the opponent.
-- Uses atomic Dragonfly scripts for matching and compare-and-set move commits, so multiple web replicas are safe.
-- Streams game state over SSE and Redis pub/sub instead of polling during play.
-- Puts the game ID in `/games/<UUID>` so refreshing can reconnect to the same table.
-- Expires unmatched seats after five seconds and gives disconnected players three minutes to reconnect.
-- Provides an explicit quit action that clears both seat assignments immediately.
-- Retains inactive game records for at most 24 hours as a final storage bound.
-
-## Local development
-
-```bash
+```sh
 docker compose up --build
+docker compose --profile test run --build --rm test
 ```
 
-Open <http://localhost:3001> in two tabs. Because Compose supplies no Passmower configuration, each tab asks for an anonymous name and receives a separate identity. Local Redis state is intentionally ephemeral.
+Open <http://localhost:3001>. Compose uses anonymous play and disposable Dragonfly state. The test service runs TypeScript, runtime and game tests against Dragonfly.
 
-Compose uses the cached development image target and keeps Next.js build output in memory, so it skips the production build and starts quickly after the first dependency install.
+## Environment
 
-Authentication mode is automatic: when the `OIDC_ISSUER`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` values supplied by Passmower are present, login is required. If they are absent, the anonymous name prompt is used instead.
+Read at startup; restart after changing configuration. Feature switches accept `true` or `false`.
 
-## Kubernetes
+| Variable | Default | Usage |
+| --- | --- | --- |
+| `AUTH_MODE` | Auto | `anon`: anonymous only; `optional`: anonymous or login; `enforced`: login required; `invite`: authenticated hosts, anonymous or authenticated invitees, no automatic matching. Auto selects enforced with complete OIDC configuration, otherwise anon. |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Unset | All required for authentication modes other than anon. |
+| `NEXTAUTH_URL`, `NEXTAUTH_SECRET` | Unset | Public origin and shared session secret for login. |
+| `SPECTATOR_MODE` | `invite` | Invite links open as spectators; **Play against …** takes the opponent seat. `disabled` joins immediately and disables spectating. |
+| `ENABLE_COMPUTER` | `true` | Allow filling the opponent seat with a computer. |
+| `ENABLE_DEMO` | `true` | Enable browser-only computer-versus-computer demos. |
+| `ALLOW_SELF_PLAY` | `false` | Give authenticated users separate seats per tab; anonymous seats always use per-tab identities. |
+| `REDIS_URL` | `redis://checkers-redis:6379/0` | Game storage and pub/sub URL. |
+| `REDIS_PASSWORD` | Unset | Separate Redis password. |
+| `PORT`, `HOSTNAME` | `3000`, `::` | Public listener; Docker sets port `3001`. |
+| `METRICS_PORT` | `3002` | Internal listener: `/metrics`, `/health`, `/ready`. |
+| `TLS_CERT_FILE`, `TLS_KEY_FILE` | Unset | Set both PEM paths to enable HTTPS on both production listeners. |
+| `NODE_EXTRA_CA_CERTS` | Unset | CA bundle for internal TLS. |
+| `TEST_REDIS_URL` | Unset | Disposable Redis/Dragonfly URL; enables storage integration tests. |
 
-The chart defaults to the public `ghcr.io/codemowers/checkers:latest` image published by the CI workflow, so `helm install checkers chart --set domain=<host>` needs no registry credentials and no image values.
+Compose forwards feature switches, e.g. `SPECTATOR_MODE=disabled docker compose up --build`. Helm config uses `env`, e.g. `--set env.AUTH_MODE=optional`. The chart defaults to `invite`; Skaffold overrides it to `optional`.
 
-`skaffold dev` builds with the local Docker daemon and pushes to the `zot.ee-lte-1.codemowers.io` registry, overriding the chart's `image` and setting `imagePullSecret: zot-pull-secret`, then installs the same chart. The chart registers the application with [Passmower](https://github.com/passmower/passmower) and creates the NextAuth secret, TLS certificate, two application replicas, and Dragonfly instance. The cluster must provide Dragonfly, Passmower, StringSecret, cert-manager, and Traefik.
+## Session gauge
 
-Passmower creates the `oidc-client-checkers-owner-secrets` Secret consumed by the application.
+`checkers_open_game_sessions{role="player|spectator",auth="anonymous|authenticated"}` counts occupied human seats. A two-person game contributes two player seats; a waiting host contributes one. Finished games, computers and demos contribute no player seats. Spectators count once per viewer per game, even during reconnects; disconnected leases expire after 45 seconds if cleanup fails.
 
-## Texture
+Every replica reports the same global counts. Aggregate with `max by (role, auth) (checkers_open_game_sessions)`, not a sum. Storage failures fail the scrape instead of reporting zero.
 
-`public/textures/wood-table-001.jpg` is the 1K diffuse map from [Wood Table 001 by Poly Haven](https://polyhaven.com/a/wood_table_001), released under CC0. It is not checked in: the Docker build downloads it into the image and verifies its SHA-256. Outside Docker, `npm run textures` fetches the same file — and without it the board simply renders in flat colours.
+The [menu flowchart](docs/menu-flow.dot) can be rendered with `dot -Tsvg docs/menu-flow.dot -o /tmp/checkers-menu.svg`. Run `bash scripts/smoke-image.sh <image>` to verify the production runtime over HTTP and HTTPS.
+
+The Docker build downloads the CC0 [Wood Table 001 texture by Poly Haven](https://polyhaven.com/a/wood_table_001) and verifies its checksum.

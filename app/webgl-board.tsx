@@ -1,15 +1,18 @@
 "use client";
 
 import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
-import { Environment, Lightformer, OrbitControls, PerspectiveCamera, SoftShadows } from "@react-three/drei";
+import { Environment, Lightformer, OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import { playbackFrames, sameBoard, type BoardFrame } from "../lib/board-playback";
 import { captureSources, legalTargets, owner, same } from "../lib/rules";
+import { CAPTURE_SCALE, capturedLayout } from "../lib/captured-layout";
+import { soleLegalMove, isMoveShortcut } from "../lib/move-shortcuts";
 import type { Move, Position, PublicGame } from "../lib/types";
 
-type Props = { game: PublicGame; player: number; onMove: (move: Move) => void; disabled: boolean };
+type Props = { game: PublicGame; player: number; onMove: (move: Move) => void; disabled: boolean; autoOrbit?: boolean; orbitPaused?: boolean };
 
 /** The lamp hangs here; the beam, the bulb and the dust in it all key off this height. */
 const LAMP_HEIGHT = 5.9;
@@ -23,64 +26,6 @@ const SLIDE_SECONDS = 0.42;
  * than a fifth of a square above it.
  */
 const PIECE_REST = 0.135;
-/**
- * Roughly where taken pieces pile up beside their captor; the other seat
- * mirrors it. Spread along the table's edge rather than clustered: the left of
- * the frame is foreshortened hard, and anchors a unit apart there land ~50px
- * apart on screen, near enough for one pile to hide behind another.
- */
-const PILES: [number, number][] = [[-5.45, 2.45], [-5.65, 1.2], [-5.8, -0.1]];
-/** Four to six a pile, so three of them always take a full dozen. */
-const PILE_RANGE = 3;
-const PILE_MIN = 4;
-
-/** FNV-1a: turns the game's id into something a generator can start from. */
-function seedFrom(id: string) {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < id.length; index++) {
-    hash ^= id.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-/** mulberry32. Small, seedable, and good enough to scatter a few draughts. */
-function pseudorandom(seed: number) {
-  let state = seed || 1;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
-    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-type Pile = {
-  at: [number, number];
-  holds: number;
-  discs: { nudge: [number, number]; spin: number; tilt: [number, number] }[];
-};
-
-/**
- * How one player's piles fall: where they sit, how many each takes and how
- * squarely each disc lands. Seeded from the game's id, so it is settled for a
- * table and different between them without the server storing any of it — and
- * stable across re-renders and reconnects, which a live Math.random would not
- * be. Jitter is kept inside the margin the anchors were checked against, so a
- * pile cannot wander off frame or into its neighbour.
- */
-function pileLayout(seed: string): Pile[] {
-  const next = pseudorandom(seedFrom(seed));
-  return PILES.map(([x, z]) => ({
-    at: [x + (next() - 0.5) * 0.28, z + (next() - 0.5) * 0.32],
-    holds: PILE_MIN + Math.floor(next() * PILE_RANGE),
-    discs: Array.from({ length: PILE_MIN + PILE_RANGE }, () => ({
-      nudge: [(next() - 0.5) * 0.1, (next() - 0.5) * 0.1] as [number, number],
-      spin: next() * Math.PI * 2,
-      tilt: [(next() - 0.5) * 0.055, (next() - 0.5) * 0.055] as [number, number],
-    })),
-  }));
-}
 /** The shared 0..1 breath every "this can move" cue rides on, so they agree. */
 const breathe = (time: number, calm: boolean) => (calm ? 0.55 : 0.5 + 0.5 * Math.sin(time * 3.4));
 const cueLift = (time: number, calm: boolean) => 0.26 + 0.58 * breathe(time, calm);
@@ -97,7 +42,11 @@ const PIECE_PROFILE = (() => {
   const radius = 0.42;
   const half = 0.09;
   const bevel = 0.042;
-  const points = [new THREE.Vector2(0, -half), new THREE.Vector2(radius - bevel, -half)];
+  // A recessed underside with a solid roof and a rounded rim. Turn it over
+  // on promotion and the cavity becomes a bowl, rather than adding a crown.
+  const points = [new THREE.Vector2(0, 0.045), new THREE.Vector2(0.23, 0.045),
+    new THREE.Vector2(0.29, 0.015), new THREE.Vector2(0.32, -0.055),
+    new THREE.Vector2(0.35, -half), new THREE.Vector2(radius - bevel, -half)];
   const shoulder = (centreY: number, from: number, to: number) => {
     for (let step = 1; step <= 4; step++) {
       const angle = from + (to - from) * (step / 4);
@@ -287,7 +236,7 @@ function useTopDownStart() {
   return topDown;
 }
 
-function CameraRig() {
+function CameraRig({ autoOrbit = false }: { autoOrbit?: boolean }) {
   const { size } = useThree();
   const compact = size.width < 720;
   const topDown = useTopDownStart();
@@ -296,24 +245,28 @@ function CameraRig() {
   // Opening at OVERHEAD rather than dead down, for the same reason the snap
   // stops short of it: the pole has no defined roll, and the controls clamp
   // there anyway, so starting past it would just be dragged back.
-  const position: [number, number, number] = topDown
+  const position: [number, number, number] = topDown && !autoOrbit
     ? [0, Math.cos(OVERHEAD) * EYE_DISTANCE, Math.sin(OVERHEAD) * EYE_DISTANCE]
     : [compact ? 1.1 : 1.5, compact ? 11 : 9.6, compact ? 12.5 : 11.6];
-  return <PerspectiveCamera ref={camera} makeDefault position={position} fov={compact ? 47 : 43} />;
+  return <PerspectiveCamera ref={camera} makeDefault position={position} near={0.5} far={80} fov={compact ? 47 : 43} />;
 }
 
-function TableControls() {
+function TableControls({ autoOrbit = false, orbitPaused = false }: { autoOrbit?: boolean; orbitPaused?: boolean }) {
   const controls = useRef<OrbitControlsImpl>(null);
   const { camera, gl, size } = useThree();
   /** Wheel zoom, on top of the fit. 1 is the whole board; above that, closer in. */
   const closeness = useRef(1);
+  useFrame((_, delta) => {
+    // Keep the slow demo orbit consistent across display refresh rates.
+    if (autoOrbit && controls.current) controls.current.autoRotateSpeed = 0.25 * Math.min(delta, 0.1) * 60;
+  });
   const frameBoard = useCallback(() => {
     if (!(camera instanceof THREE.PerspectiveCamera)) return;
     camera.zoom = 1;
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld();
     let extent = 0;
-    for (const x of [-4.75, 4.75]) for (const y of [-0.4, 0.9]) for (const z of [-4.75, 4.75]) {
+    for (const x of [-8.2, 8.2]) for (const y of [-0.4, 0.9]) for (const z of [-5, 5]) {
       const corner = new THREE.Vector3(x, y, z).project(camera);
       extent = Math.max(extent, Math.abs(corner.x), Math.abs(corner.y));
     }
@@ -347,7 +300,7 @@ function TableControls() {
     control.update();
     frameBoard();
   }
-  return <OrbitControls ref={controls} makeDefault enableDamping={false} enablePan={false} enableZoom={false} minPolarAngle={OVERHEAD} maxPolarAngle={1.05} minAzimuthAngle={-0.25} maxAzimuthAngle={0.25} onChange={frameBoard} onEnd={snapOverhead} mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }} touches={{ ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN }} />;
+  return <OrbitControls ref={controls} makeDefault enableDamping={false} enablePan={false} enableZoom={false} minPolarAngle={OVERHEAD} maxPolarAngle={1.05} autoRotate={autoOrbit && !orbitPaused} autoRotateSpeed={0.25} minAzimuthAngle={autoOrbit ? -Infinity : -0.25} maxAzimuthAngle={autoOrbit ? Infinity : 0.25} onChange={frameBoard} onEnd={snapOverhead} mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }} touches={{ ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE }} />;
 }
 
 /**
@@ -381,7 +334,9 @@ function useShaftMaterial() {
       varying vec3 toEye;
       void main() {
         float along = pow(clamp(grain.y, 0.0, 1.0), 1.8);
-        float rim = pow(1.0 - abs(dot(face, toEye)), 1.5);
+        // GPU rounding can put the dot product just outside [-1, 1]. A
+        // negative base produces NaN, which bloom spreads over the frame.
+        float rim = pow(clamp(1.0 - abs(dot(face, toEye)), 0.0, 1.0), 1.5);
         gl_FragColor = vec4(color, strength * along * (0.35 + 0.9 * rim));
       }`,
   }), []);
@@ -666,11 +621,11 @@ function Espresso({ calm }: { calm: boolean }) {
 }
 
 /**
- * The disc itself. Shared by the pieces in play and the piles of taken ones so
+ * The disc itself. Shared by the pieces in play and the captured ones so
  * a captured piece cannot drift out of step with the board's.
  */
 function Draught({ side, king, collar }: { side: number; king?: boolean; collar?: React.Ref<THREE.MeshStandardMaterial> }) {
-  return <>
+  return <group rotation={[king ? Math.PI : 0, 0, 0]}>
     <mesh castShadow receiveShadow>
       <latheGeometry args={[PIECE_PROFILE, 48]} />
       {/* Clearcoat catches the lamp, which is what sells a bakelite draught piece under a bar light. */}
@@ -680,61 +635,58 @@ function Draught({ side, king, collar }: { side: number; king?: boolean; collar?
       <ringGeometry args={[0.24, 0.31, 40]} />
       <meshStandardMaterial ref={collar} color={side === 0 ? "#d66a55" : "#4c504e"} emissive={side === 0 ? "#ff8b66" : "#9fb0a6"} emissiveIntensity={0} roughness={0.4} />
     </mesh>
-    {king && <mesh position={[0, 0.12, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-      <ringGeometry args={[0.08, 0.18, 6]} />
-      <meshStandardMaterial color="#d9ae60" metalness={0.65} roughness={0.22} />
-    </mesh>}
-  </>;
+    <mesh position={[0, -0.09, 0]} rotation={[Math.PI / 2, 0, 0]}>
+      <ringGeometry args={[0.35, 0.38, 48]} />
+      <meshStandardMaterial color={side === 0 ? "#d66a55" : "#4c504e"} roughness={0.4} />
+    </mesh>
+  </group>;
 }
 
-/** A pile of pieces someone has taken, sat on the cloth beside them. */
-function CapturedPile({ pile, count, side, mirrored }: { pile: Pile; count: number; side: number; mirrored: boolean }) {
-  const [x, z] = mirrored ? [-pile.at[0], -pile.at[1]] : pile.at;
-  // 0.195 of clearance a disc: enough that a tilted one still rests clear of
-  // the one below rather than sinking into it.
-  return <>{pile.discs.slice(0, count).map((disc, level) => (
-    <group key={level} position={[x + disc.nudge[0], -0.268 + level * 0.195, z + disc.nudge[1]]} rotation={[disc.tilt[0], disc.spin, disc.tilt[1]]}>
-      <Draught side={side} />
-    </group>
-  ))}</>;
-}
-
-function Piece({ piece, position, selected, required, canSelect, flipped, calm, slideFrom, onSelect, onDrop }: {
-  piece: number; position: Position; selected: boolean; required: boolean; canSelect: boolean;
-  flipped: boolean; calm: boolean; slideFrom?: Position; onSelect: (p: Position) => void; onDrop: (from: Position, to: Position) => void;
+type Landing = { origin: [number, number, number]; promoted?: boolean };
+function Piece({ cameraGesture, size, piece, position, selected, required, canSelect, flipped, calm, landing, onSelect, onDrop }: {
+  cameraGesture: { current: boolean }; size: number; piece: number; position: Position; selected: boolean; required: boolean; canSelect: boolean;
+  flipped: boolean; calm: boolean; landing?: Landing; onSelect: (p: Position) => void;
+  onDrop: (from: Position, to: Position, release: [number, number, number]) => boolean;
 }) {
   const [drag, setDrag] = useState<THREE.Vector3>();
   const boardPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), -PIECE_REST), []);
   const body = useRef<THREE.Group>(null);
+  const flip = useRef<THREE.Group>(null);
   const collar = useRef<THREE.MeshStandardMaterial>(null);
-  const travelled = useRef(1);
-  const square = (at: Position) => new THREE.Vector3(at.col - 3.5, PIECE_REST, at.row - 3.5);
-  const base = useMemo(() => square(position), [position.col, position.row]);
-  const origin = useMemo(() => (slideFrom ? square(slideFrom) : undefined), [slideFrom]);
-
-  // A piece arriving from the other side of the table mounts on its old square
-  // and walks over, so the opponent's move is something you watch happen.
+  const motion = useRef<{ from: THREE.Vector3; progress: number; promote?: boolean } | undefined>(undefined);
+  const pendingDestination = useRef<THREE.Vector3 | undefined>(undefined);
+  const cell = 8 / size;
+  const center = (size - 1) / 2;
+  const base = useMemo(() => new THREE.Vector3((position.col - center) * cell, PIECE_REST, (position.row - center) * cell), [position.col, position.row, size]);
   useLayoutEffect(() => {
-    travelled.current = origin ? 0 : 1;
-    body.current?.position.copy(origin ?? base);
-  }, [base, origin]);
+    if (landing) {
+      motion.current = { from: new THREE.Vector3(...landing.origin), progress: 0, promote: landing.promoted };
+      body.current?.position.copy(motion.current.from);
+    } else if (!motion.current || motion.current.progress >= 1) body.current?.position.copy(base);
+  }, [base, landing]);
   useFrame((state, delta) => {
     const node = body.current;
     if (!node) return;
-    // The piece's own ring brightens instead of wearing a white one.
     if (collar.current) collar.current.emissiveIntensity = required ? cueLift(state.clock.elapsedTime, calm) : 0;
-    const settle = () => { node.scale.setScalar(selected ? 1.08 : 1); node.rotation.z = 0; };
-    if (drag) { node.position.copy(drag); node.scale.setScalar(1.12); node.rotation.z = 0; return; }
-    if (!origin || travelled.current >= 1) { node.position.copy(base); settle(); return; }
-    travelled.current = Math.min(1, travelled.current + delta / SLIDE_SECONDS);
-    const eased = 1 - (1 - travelled.current) ** 3;
-    // Picked up, carried over and set down: the arc, the swell and the tilt
-    // together are what make it read as a hand moving a piece.
-    const arc = Math.sin(Math.PI * eased);
-    node.position.lerpVectors(origin, base, eased);
-    node.position.y = base.y + arc * (0.32 + origin.distanceTo(base) * 0.13);
-    node.scale.setScalar(1 + arc * 0.1);
-    node.rotation.z = arc * 0.13;
+    if (drag && !cameraGesture.current) { node.position.copy(drag); node.scale.setScalar(1.1); return; }
+    const destination = pendingDestination.current ?? base;
+    const flight = motion.current;
+    if (flight && flight.progress < 1) {
+      flight.progress = Math.min(1, flight.progress + delta / (calm ? 0.08 : flight.promote ? 0.72 : SLIDE_SECONDS));
+      const t = flight.progress;
+      const eased = 1 - (1 - Math.min(1, t / (flight.promote ? 0.65 : 1))) ** 3;
+      node.position.lerpVectors(flight.from, destination, eased);
+      node.position.y += calm ? 0 : Math.sin(Math.PI * eased) * 0.24;
+      node.scale.setScalar(1 + Math.sin(Math.PI * eased) * 0.08);
+      if (flip.current) {
+        const turn = flight.promote ? THREE.MathUtils.smoothstep(t, 0.55, 1) : piece >= 3 ? 1 : 0;
+        flip.current.rotation.x = Math.PI * turn;
+        if (flight.promote && !calm) node.position.y += Math.sin(Math.PI * turn) * 0.52;
+      }
+    } else {
+      node.position.copy(destination); node.scale.setScalar(selected ? 1.08 : 1);
+      if (flip.current) flip.current.rotation.x = piece >= 3 ? Math.PI : 0;
+    }
   });
   function point(event: ThreeEvent<PointerEvent>) {
     const hit = new THREE.Vector3();
@@ -742,60 +694,82 @@ function Piece({ piece, position, selected, required, canSelect, flipped, calm, 
     return flipped ? hit.set(-hit.x, hit.y, -hit.z) : hit;
   }
   function down(event: ThreeEvent<PointerEvent>) {
-    if (!canSelect || event.button !== 0) return;
+    if (cameraGesture.current || !canSelect || event.button !== 0) return;
     event.stopPropagation();
     (event.target as Element).setPointerCapture(event.pointerId);
     onSelect(position);
     setDrag(point(event)?.setY(0.72));
   }
-  function move(event: ThreeEvent<PointerEvent>) { if (drag) { event.stopPropagation(); const next = point(event); if (next) setDrag(next.setY(0.72)); } }
+  function move(event: ThreeEvent<PointerEvent>) {
+    if (cameraGesture.current) { setDrag(undefined); return; }
+    if (drag) { event.stopPropagation(); const next = point(event); if (next) setDrag(next.setY(0.72)); }
+  }
   function up(event: ThreeEvent<PointerEvent>) {
     if (!drag) return;
     event.stopPropagation();
     (event.target as Element).releasePointerCapture(event.pointerId);
-    const hit = point(event);
+    const hit = cameraGesture.current ? undefined : point(event);
+    const release = (hit?.clone().setY(0.72) ?? drag).toArray() as [number, number, number];
+    const accepted = hit && onDrop(position, { row: Math.round(hit.z / cell + center), col: Math.round(hit.x / cell + center) }, release);
+    // A rejected drop returns smoothly from the actual release position.
+    if (accepted && hit) {
+      pendingDestination.current = new THREE.Vector3((Math.round(hit.x / cell + center) - center) * cell, PIECE_REST, (Math.round(hit.z / cell + center) - center) * cell);
+    }
+    motion.current = { from: new THREE.Vector3(...release), progress: 0 };
     setDrag(undefined);
-    if (hit) onDrop(position, { row: Math.round(hit.z + 3.5), col: Math.round(hit.x + 3.5) });
   }
-  return <group ref={body} onPointerDown={down} onPointerMove={move} onPointerUp={up}>
-    <Draught side={owner(piece)} king={piece >= 3} collar={collar} />
+  return <group ref={body} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={() => {
+    if (drag) motion.current = { from: drag.clone(), progress: 0 };
+    setDrag(undefined);
+  }}>
+    <group ref={flip} rotation={[piece >= 3 && !landing?.promoted ? Math.PI : 0, 0, 0]} scale={[cell, 1, cell]}><Draught side={owner(piece)} collar={collar} /></group>
   </group>;
 }
 
-/**
- * Work out what the other player just did by diffing the board against the one
- * it replaced. Exactly one square gains a piece per ply, so the move is
- * recoverable here and the server never has to describe it.
- */
-function inferMove(before: number[][], after: number[][], player: number) {
-  const vacated: Position[] = [];
-  let landed: Position | undefined;
-  let landings = 0;
-  for (let row = 0; row < 8; row++) for (let col = 0; col < 8; col++) {
-    if (before[row][col] === after[row][col]) continue;
-    if (after[row][col] === 0) vacated.push({ row, col });
-    else if (before[row][col] === 0) { landed = { row, col }; landings++; }
-  }
-  // More than one landing means revisions were skipped, and the diff no longer
-  // describes a single move; your own move already happened under your hand.
-  if (!landed || landings > 1) return undefined;
-  const mover = owner(after[landed.row][landed.col]);
-  if (mover === player) return undefined;
-  const from = vacated.find((square) => owner(before[square.row][square.col]) === mover);
-  return from ? { from, to: landed } : undefined;
+/** Play every authoritative move in order; acknowledgements never replay a predicted move. */
+function useBoardPlayback(target: PublicGame, calm: boolean) {
+  const [frame, setFrame] = useState<BoardFrame>({ game: target, captured: [] });
+  const latest = useRef(target);
+  const queue = useRef<BoardFrame[]>([]);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const advance = useCallback(() => {
+    const next = queue.current.shift();
+    if (!next) { timer.current = undefined; setFrame((last) => ({ game: last.game, captured: [] })); return; }
+    setFrame(next);
+    const duration = next.captured.length ? 900 : next.promoted ? 750 : next.move ? 450 : 0;
+    timer.current = setTimeout(advance, calm ? Math.min(duration, 80) : duration);
+  }, [calm]);
+  useLayoutEffect(() => {
+    const before = latest.current;
+    if (before === target) return;
+    latest.current = target;
+    if (before.id !== target.id && !sameBoard(before, target)) {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = undefined; queue.current = [];
+      setFrame({ game: target, captured: [] });
+      return;
+    }
+    queue.current.push(...playbackFrames(before, target));
+    if (!timer.current) advance();
+  }, [target, advance]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  return { frame, animating: !!frame.move || queue.current.length > 0 };
 }
 
-function useOpponentMove(game: PublicGame, player: number) {
-  const seen = useRef<{ id: string; revision: number; board: number[][] }>();
-  const slide = useRef<{ from: Position; to: Position }>();
-  const previous = seen.current;
-  if (!previous || previous.id !== game.id || previous.revision !== game.revision) {
-    slide.current = previous && previous.id === game.id && game.revision > previous.revision
-      ? inferMove(previous.board, game.board, player)
-      : undefined;
-    seen.current = { id: game.id, revision: game.revision, board: game.board };
-  }
-  return slide.current;
+function FlyingCapture({ piece, from, to, cell, calm, spin }: { piece: number; from: [number, number, number]; to: [number, number, number]; cell: number; calm: boolean; spin: number }) {
+  const ref = useRef<THREE.Group>(null);
+  const progress = useRef(0);
+  useFrame((_, delta) => {
+    if (!ref.current) return;
+    progress.current = Math.min(1, progress.current + delta / (calm ? 0.08 : 0.85));
+    const t = THREE.MathUtils.smoothstep(progress.current, 0.2, 1);
+    ref.current.position.set(...from).lerp(new THREE.Vector3(...to), t);
+    if (!calm) ref.current.position.y += Math.sin(Math.PI * t) * 1.8;
+    ref.current.scale.setScalar(cell + (CAPTURE_SCALE - cell) * t);
+    ref.current.rotation.y = spin * t;
+    ref.current.rotation.x = piece >= 3 ? -Math.PI * t : 0;
+  });
+  return <group ref={ref} position={from}><Draught side={owner(piece)} king={piece >= 3} /></group>;
 }
 
 /**
@@ -803,25 +777,68 @@ function useOpponentMove(game: PublicGame, player: number) {
  * by lighting the square up: unlit and dark, so it sits under the lamp like
  * every other shadow on the board instead of glowing out of the wood.
  */
-function TargetShadow({ at, calm }: { at: Position; calm: boolean }) {
+function TargetShadow({ at, calm, size }: { at: Position; calm: boolean; size: number }) {
+  const cell = 8 / size;
+  const center = (size - 1) / 2;
   const ring = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
     const mesh = ring.current;
     if (!mesh) return;
     const breath = breathe(clock.elapsedTime, calm);
     (mesh.material as THREE.MeshBasicMaterial).opacity = 0.24 + 0.32 * breath;
-    mesh.scale.setScalar(0.93 + 0.11 * breath);
+    mesh.scale.setScalar(cell * (0.93 + 0.11 * breath));
   });
-  return <mesh ref={ring} position={[at.col - 3.5, 0.049, at.row - 3.5]} rotation={[-Math.PI / 2, 0, 0]}>
+  return <mesh ref={ring} position={[(at.col - center) * cell, 0.049, (at.row - center) * cell]} rotation={[-Math.PI / 2, 0, 0]}>
     <ringGeometry args={[0.26, 0.39, 44]} />
     <meshBasicMaterial color="#150b03" transparent opacity={0.3} depthWrite={false} />
   </mesh>;
 }
 
-function Table({ game, player, onMove, disabled }: Props) {
+function Table({ game: target, player, onMove, disabled, cameraGesture }: Props & { cameraGesture: { current: boolean } }) {
   const calmMotion = useCalm();
+  const { frame, animating } = useBoardPlayback(target, calmMotion);
+  const game = frame.game;
+  const { gl } = useThree();
+  const shortcutRevision = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (disabled || animating) shortcutRevision.current = undefined;
+    const playOnlyMove = () => {
+      if (disabled || animating) return false;
+      const revision = `${game.id}:${game.revision}`;
+      const move = soleLegalMove(game, player);
+      if (!move || shortcutRevision.current === revision) return false;
+      shortcutRevision.current = revision;
+      onMove(move);
+      return true;
+    };
+    const doubleClick = (event: MouseEvent) => {
+      if (event.button === 0 && !cameraGesture.current && playOnlyMove()) event.preventDefault();
+    };
+    const keyDown = (event: KeyboardEvent) => {
+      if (isMoveShortcut(event) && playOnlyMove()) event.preventDefault();
+    };
+    gl.domElement.addEventListener("dblclick", doubleClick);
+    window.addEventListener("keydown", keyDown);
+    return () => {
+      gl.domElement.removeEventListener("dblclick", doubleClick);
+      window.removeEventListener("keydown", keyDown);
+    };
+  }, [game, player, disabled, animating, cameraGesture, gl, onMove]);
+  const released = useRef<{ move: Move; origin: [number, number, number] } | undefined>(undefined);
+  const size = game.board.length;
+  const cell = 8 / size;
+  const center = (size - 1) / 2;
+  const startingPieces = size * (size / 2 - 1) / 2;
   const wood = useWoodGrain("/textures/wood-table-001.jpg");
-  const arriving = useOpponentMove(game, player);
+  const arriving = frame.move;
+  const landing = useMemo<Landing | undefined>(() => {
+    if (!arriving) return undefined;
+    const dropped = released.current;
+    const origin: [number, number, number] = dropped && same(dropped.move.from, arriving.from) && same(dropped.move.to, arriving.to)
+      ? dropped.origin : [(arriving.from.col - center) * cell, PIECE_REST, (arriving.from.row - center) * cell];
+    released.current = undefined;
+    return { origin, promoted: frame.promoted };
+  }, [arriving, cell, center, frame.promoted]);
   const [selected, setSelected] = useState<Position | undefined>(game.forced);
   const requiredSources = game.turn === player ? captureSources(game, player) : [];
   useEffect(() => {
@@ -829,19 +846,28 @@ function Table({ game, player, onMove, disabled }: Props) {
     else if (game.turn === player && requiredSources.length === 1) setSelected(requiredSources[0]);
     else setSelected(undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requiredSources is derived from these
-  }, [game.revision, game.turn, player]);
+  }, [game.id, game.revision, game.turn, player]);
   const legal = selected ? legalTargets(game, player, selected) : [];
-  // What each side has taken: twelve discs a colour, less those still standing.
+  // What each side has taken, excluding pieces still blocking a chained capture.
   const live = game.board.flat();
-  const taken = [12 - live.filter((disc) => disc === 2 || disc === 4).length, 12 - live.filter((disc) => disc === 1 || disc === 3).length];
-  // A layout each, so the two sides are not mirror images of one another.
-  const piles = useMemo(() => [pileLayout(`${game.id}:red`), pileLayout(`${game.id}:black`)], [game.id]);
+  const taken = [startingPieces - live.filter((disc) => disc === 2 || disc === 4).length, startingPieces - live.filter((disc) => disc === 1 || disc === 3).length];
+  // Each captor's left is opposite in board space; rotating the board for
+  // black also brings black's collection to the left of their view.
+  const captures = useMemo(() => [
+    capturedLayout(`${game.id}:red`, startingPieces),
+    capturedLayout(`${game.id}:black`, startingPieces, true),
+  ], [game.id, startingPieces]);
   function chooseSquare(to: Position) {
+    if (disabled || animating || cameraGesture.current) return;
     if (selected && legal.some((p) => same(p, to))) { onMove({ from: selected, to }); setSelected(undefined); }
     else if (owner(game.board[to.row][to.col]) === player) setSelected(to);
   }
-  function drop(from: Position, to: Position) {
-    if (legalTargets(game, player, from).some((p) => same(p, to))) { onMove({ from, to }); setSelected(undefined); }
+  function drop(from: Position, to: Position, origin: [number, number, number]) {
+    if (disabled || animating || cameraGesture.current) return false;
+    if (!legalTargets(game, player, from).some((p) => same(p, to))) return false;
+    released.current = { move: { from, to }, origin };
+    onMove({ from, to }); setSelected(undefined);
+    return true;
   }
   return <group rotation={[0, player === 1 ? Math.PI : 0, 0]}>
     <Tumbler calm={calmMotion} />
@@ -850,31 +876,34 @@ function Table({ game, player, onMove, disabled }: Props) {
       <boxGeometry args={[9.25, 0.35, 9.25]} />
       <meshStandardMaterial map={wood} color="#93613c" roughness={0.5} envMapIntensity={0.12} />
     </mesh>
-    {legal.map((at) => <TargetShadow key={`${at.row}-${at.col}`} at={at} calm={calmMotion} />)}
+    {legal.map((at) => <TargetShadow key={`${at.row}-${at.col}`} at={at} calm={calmMotion} size={size} />)}
     {[0, 1].flatMap((captor) => {
-      // Fill a pile before starting the next, the way a hand would.
-      let left = taken[captor];
-      return piles[captor].map((pile, index) => {
-        const height = Math.min(pile.holds, left);
-        left -= height;
-        // Red keeps its winnings on its own side of the table; black mirrors it.
-        return height > 0
-          ? <CapturedPile key={`${captor}-${index}`} pile={pile} count={height} side={1 - captor} mirrored={captor === 1} />
-          : null;
-      });
+      const settled = taken[captor] - frame.captured.filter((capture) => owner(capture.piece) === 1 - captor).length;
+      return captures[captor].slice(0, settled).map((disc, index) => (
+        <group key={`${captor}-${index}`} position={disc.at} rotation={[0, disc.spin, 0]} scale={CAPTURE_SCALE}>
+          <Draught side={1 - captor} />
+        </group>
+      ));
+    })}
+    {frame.captured.map((capture, index) => {
+      const captor = 1 - owner(capture.piece);
+      const sameSide = frame.captured.filter((other) => owner(other.piece) === owner(capture.piece));
+      const slot = taken[captor] - sameSide.length + sameSide.indexOf(capture);
+      const disc = captures[captor][slot];
+      return <FlyingCapture key={`${game.revision}-${index}`} piece={capture.piece} from={[(capture.at.col - center) * cell, PIECE_REST, (capture.at.row - center) * cell]} to={disc.at} spin={disc.spin} cell={cell} calm={calmMotion} />;
     })}
     {game.board.flatMap((row, r) => row.map((piece, c) => {
       const dark = (r + c) % 2 === 1;
       const tone = (dark ? DARK_SQUARES : LIGHT_SQUARES)[(r * 7 + c * 13) % 5];
       const position = { row: r, col: c };
       const mustMoveThisPiece = requiredSources.some((source) => same(source, position));
-      const canSelect = !disabled && game.turn === player && owner(piece) === player && (!requiredSources.length || mustMoveThisPiece);
+      const canSelect = !disabled && !animating && game.turn === player && owner(piece) === player && (!requiredSources.length || mustMoveThisPiece);
       return <group key={`${r}-${c}`}>
-        <mesh position={[c - 3.5, 0.015, r - 3.5]} receiveShadow onClick={(event) => { event.stopPropagation(); chooseSquare(position); }}>
-          <boxGeometry args={[0.99, 0.06, 0.99]} />
+        <mesh position={[(c - center) * cell, 0.015, (r - center) * cell]} receiveShadow onClick={(event) => { event.stopPropagation(); chooseSquare(position); }}>
+          <boxGeometry args={[cell - 0.01, 0.06, cell - 0.01]} />
           <meshStandardMaterial color={tone} roughness={0.62} envMapIntensity={0.12} map={dark ? wood : undefined} />
         </mesh>
-        {piece > 0 && <Piece piece={piece} position={position} selected={same(selected, position)} required={mustMoveThisPiece} canSelect={canSelect} flipped={player === 1} calm={calmMotion} slideFrom={arriving && same(arriving.to, position) ? arriving.from : undefined} onSelect={setSelected} onDrop={drop} />}
+        {piece > 0 && <Piece cameraGesture={cameraGesture} size={size} piece={piece} position={position} selected={same(selected, position)} required={mustMoveThisPiece} canSelect={canSelect} flipped={player === 1} calm={calmMotion} landing={arriving && same(arriving.to, position) ? landing : undefined} onSelect={setSelected} onDrop={drop} />}
       </group>;
     }))}
   </group>;
@@ -929,24 +958,34 @@ function BarRoom({ calm, theirs }: { calm: boolean; theirs: boolean }) {
 
 export default function WebGLBoard(props: Props) {
   const calm = useCalm();
-  const turn = props.game.status !== "playing" ? "idle" : props.game.turn === props.player ? "yours" : "theirs";
-  return <div className="board-canvas" onContextMenu={(event) => event.preventDefault()}>
-    <Canvas shadows dpr={[1, 1.75]} gl={{ antialias: true, alpha: true }} onCreated={({ gl }) => { gl.toneMapping = THREE.ACESFilmicToneMapping; gl.toneMappingExposure = 1.04; }}>
+  const touches = useRef(new Set<number>());
+  const cameraGesture = useRef(false);
+  const releaseTouch = (event: React.PointerEvent) => { touches.current.delete(event.pointerId); };
+  const turn = props.game.you === null || props.game.status !== "playing" ? "idle" : props.game.turn === props.player ? "yours" : "theirs";
+  return <div className="board-canvas" onContextMenu={(event) => event.preventDefault()}
+    onPointerDownCapture={(event) => {
+      if (!touches.current.size) cameraGesture.current = false;
+      if (event.pointerType !== "touch") return;
+      // Latch until the next gesture, so lifting either finger cannot drop a
+      // piece that the first finger happened to touch before the second landed.
+      touches.current.add(event.pointerId);
+      if (touches.current.size >= 2) cameraGesture.current = true;
+    }}
+    onPointerUpCapture={releaseTouch} onPointerCancelCapture={releaseTouch}>
+    <Canvas shadows="soft" dpr={[1, 1.75]} gl={{ antialias: true, alpha: true }} onCreated={({ gl }) => { gl.toneMapping = THREE.ACESFilmicToneMapping; gl.toneMappingExposure = 1.04; }}>
       <fog attach="fog" args={["#07100a", 22, 46]} />
-      <CameraRig />
-      <TableControls />
+      <CameraRig autoOrbit={props.autoOrbit} />
+      <TableControls autoOrbit={props.autoOrbit} orbitPaused={props.orbitPaused} />
       {/* One warm lamp does the work; the rest is spill, so the table falls off into the dark. */}
-      {/* Contact-hardening shadows: sharp where a piece meets the board, spreading
-          with distance. PCSS rather than accumulated samples, because the pieces move. */}
-      <SoftShadows size={22} samples={12} focus={0.9} />
+      {/* Filtered shadow maps stay stable as the demo camera circles the table. */}
       <RoomReflections />
       <ambientLight intensity={0.24} color="#7c8894" />
       <directionalLight position={[-5, 6, 7]} intensity={0.2} color="#9db4c6" />
-      <spotLight castShadow position={[0, LAMP_HEIGHT, 0]} angle={0.9} penumbra={0.9} intensity={104} distance={22} decay={2} color="#ffc98a" shadow-mapSize={[2048, 2048]} shadow-bias={-0.0005} shadow-normalBias={0.02} />
+      <spotLight castShadow position={[0, LAMP_HEIGHT, 0]} angle={0.9} penumbra={0.9} intensity={104} distance={22} decay={2} color="#ffc98a" shadow-mapSize={[2048, 2048]} shadow-camera-near={1} shadow-camera-far={16} shadow-bias={-0.00005} shadow-normalBias={0.003} />
       <pointLight position={[2.6, 1.1, 5.2]} intensity={7} distance={13} decay={2} color="#ffb673" />
       <NeonWash calm={calm} />
       <BarRoom calm={calm} theirs={turn === "theirs"} />
-      <Table {...props} />
+      <Table {...props} cameraGesture={cameraGesture} />
       {/* The bulb, its rim and the sparks in the beam are the only things over
           threshold, so the glow lands where a camera would blow out. */}
       <EffectComposer multisampling={4}>

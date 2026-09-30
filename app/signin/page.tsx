@@ -1,17 +1,10 @@
-"use client";
+import { redirect } from "next/navigation";
+import { authMode } from "../../lib/auth-mode";
+import SignIn from "./signin";
 
-import { signIn } from "next-auth/react";
-import { useEffect } from "react";
+export const dynamic = "force-dynamic";
 
-export default function SignIn() {
-  useEffect(() => {
-    const requested = new URLSearchParams(location.search).get("callbackUrl");
-    const callbackUrl = requested?.startsWith("/") && !requested.startsWith("//") ? requested : "/";
-    void signIn("passmower", { callbackUrl });
-  }, []);
-  return <main className="auth-redirect" aria-live="polite">
-    <span className="brand-mark">◆</span>
-    <p>Taking you to Passmower…</p>
-    <span className="loader" />
-  </main>;
+export default function Page() {
+  if (authMode() === "anon") redirect("/");
+  return <SignIn />;
 }

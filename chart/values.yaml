@@ -1,5 +1,12 @@
-domain: checkers.ee-lte-1.codemowers.io
+domain: checkers
 # Defaults to the public ghcr.io/codemowers/checkers:latest published by CI,
 # which needs no pull secret. Skaffold overrides both for its own registry.
 # image: ghcr.io/codemowers/checkers:v1.0.0
 # imagePullSecret: zot-pull-secret
+
+env:
+  AUTH_MODE: invite
+  ENABLE_COMPUTER: "true"
+  ENABLE_DEMO: "true"
+  SPECTATOR_MODE: invite
+  ALLOW_SELF_PLAY: "false"

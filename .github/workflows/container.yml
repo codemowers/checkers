@@ -1,6 +1,7 @@
 name: Build and publish container image
 
 on:
+  pull_request:
   push:
     branches:
       - main
@@ -23,20 +24,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+      - name: Typecheck and test with Dragonfly
+        run: docker compose --profile test run --build --rm test
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Check development health
+        run: docker compose up --build --wait web
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test
-        run: npm test
+      - name: Clean up
+        if: always()
+        run: docker compose down --volumes
 
   container:
     runs-on: ubuntu-latest
@@ -70,12 +66,31 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push image
+      - name: Build image for verification
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          load: true
+          tags: checkers:ci
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Test production HTTP and TLS
+        run: bash scripts/smoke-image.sh checkers:ci
+
+      - name: Scan image
+        run: >-
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
+          aquasec/trivy:0.65.0 image --exit-code 1 --ignore-unfixed
+          --severity HIGH,CRITICAL checkers:ci
+
+      - name: Publish verified image
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            docker tag checkers:ci "$tag"
+            docker push "$tag"
+          done <<< "$IMAGE_TAGS"

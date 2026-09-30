@@ -1,36 +1,39 @@
+import { randomUUID } from "node:crypto";
+import { spectatorMode } from "../../../../../../lib/features";
 import { identity } from "../../../../../../lib/identity";
-import { gameChannel, publishGameEnded, type PublishedEvent } from "../../../../../../lib/game-events";
+import { authMode } from "../../../../../../lib/auth-mode";
+import { gameChannel, type PublishedEvent } from "../../../../../../lib/game-events";
+import { endGame } from "../../../../../../lib/game-store";
 import { toPublicGame } from "../../../../../../lib/public-game";
-import { GAME_KEY, PRESENCE_KEY, USERS_KEY, redis } from "../../../../../../lib/redis";
+import { GAME_KEY, PRESENCE_KEY, LOBBY_KEY, SPECTATOR_KEY, redis } from "../../../../../../lib/redis";
 import { playerIndex } from "../../../../../../lib/rules";
 import type { Game, GameEvent } from "../../../../../../lib/types";
 
 export const dynamic = "force-dynamic";
-const RECONNECT_GRACE_MS = 3 * 60_000;
 const encoder = new TextEncoder();
 
-const EXPIRE_STALE_GAME = `
-local seen = redis.call('ZSCORE', KEYS[2], ARGV[1])
-if seen and tonumber(seen) >= tonumber(ARGV[2]) then return 0 end
-if redis.call('EXISTS', KEYS[1]) == 0 then return -1 end
-redis.call('HDEL', KEYS[3], ARGV[1], ARGV[3])
-redis.call('ZREM', KEYS[2], ARGV[1], ARGV[3])
-redis.call('DEL', KEYS[1])
-return 1
-`;
-
-export async function GET(request: Request, { params }: { params: { id: string } }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const player = await identity(request);
-  if (!player) return Response.json({ error: "Authentication required" }, { status: 401 });
-  const key = GAME_KEY(params.id);
+  const key = GAME_KEY(id);
   const raw = await redis.get(key);
   if (!raw) return Response.json({ error: "Game not found" }, { status: 404 });
   const initial = JSON.parse(raw) as Game;
-  const index = playerIndex(initial, player.id);
-  if (index < 0) return Response.json({ error: "Forbidden" }, { status: 403 });
-  const seat = index as 0 | 1;
-  await redis.zadd(PRESENCE_KEY, Date.now(), player.id);
+  const seatFor = (game: Game) => {
+    const index = player ? playerIndex(game, player.id) : -1;
+    return index < 0 ? null : index as 0 | 1;
+  };
+  // Invite links are view-only until the visitor explicitly claims a seat.
+  if (seatFor(initial) === null && spectatorMode() === "disabled") {
+    return Response.json({ error: "Join this table before playing." }, { status: 403 });
+  }
+  if (seatFor(initial) !== null) await redis.zadd(PRESENCE_KEY, Date.now(), player!.id);
 
+  const spectatorKey = SPECTATOR_KEY(player && !player.id.startsWith("anon:") ? "authenticated" : "anonymous");
+  const instance = request.headers.get("x-player-instance") ?? "";
+  const viewer = player?.id ?? (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(instance) ? instance : randomUUID());
+  const spectatorMember = JSON.stringify([id, viewer, randomUUID()]);
+  const startedSpectating = seatFor(initial) === null;
   const subscriber = redis.duplicate();
   subscriber.on("error", (error: Error) => console.error("Redis subscriber error:", error.message));
   let cleanup = () => {};
@@ -42,76 +45,89 @@ export async function GET(request: Request, { params }: { params: { id: string }
       const send = (event: GameEvent) => {
         if (!closed) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       };
-      const finish = () => {
-        if (closed) return;
+      const refreshSpectator = async () => {
+        if (!startedSpectating) return;
+        if (!closed && seatFor(currentGame) === null) await redis.zadd(spectatorKey, Date.now(), spectatorMember);
+        // Recheck after the write: the socket may close or claim a seat while awaiting Redis.
+        if (closed || seatFor(currentGame) !== null) await redis.zrem(spectatorKey, spectatorMember);
+      };
+      const dispose = () => {
         closed = true;
         if (heartbeat) clearInterval(heartbeat);
         subscriber.disconnect();
-        try { controller.close(); } catch {}
+        request.signal.removeEventListener("abort", finish);
+        // The response is already closed; report cleanup failures and let the lease expire.
+        void refreshSpectator().catch(error => console.error("Spectator cleanup failed:", error));
       };
-      cleanup = finish;
+      const finish = () => {
+        if (closed) return;
+        dispose();
+        controller.close();
+      };
+      const fail = (error: unknown) => {
+        if (closed) return;
+        dispose();
+        controller.error(error);
+        console.error("Game stream failed:", error);
+      };
+      cleanup = dispose;
       request.signal.addEventListener("abort", finish, { once: true });
+      if (request.signal.aborted) { finish(); return; }
 
       void (async () => {
-        const channel = gameChannel(params.id);
+        const channel = gameChannel(id);
         subscriber.on("message", (_channel, message) => {
           if (closed) return;
           // A throw in an emitter callback is an uncaught exception, which would
           // take down every other game served by this process.
           let event: PublishedEvent;
           try { event = JSON.parse(message) as PublishedEvent; }
-          catch { return console.error("Discarding malformed game event on", channel); }
+          catch (error) { if (!(error instanceof SyntaxError)) throw error; fail(error); return; }
           if (event.type === "game") {
             currentGame = event.game;
-            send({ type: "game", game: toPublicGame(event.game, seat) });
+            void refreshSpectator().catch(fail);
+            send({ type: "game", game: toPublicGame(event.game, seatFor(event.game)) });
             return;
           }
           send(event);
           finish();
         });
         await subscriber.subscribe(channel);
+        if (closed) return;
         const latestRaw = await redis.get(key);
+        if (closed) return;
         if (!latestRaw) {
           send({ type: "ended", message: "The game is no longer available." });
           finish();
           return;
         }
         currentGame = JSON.parse(latestRaw) as Game;
-        send({ type: "game", game: toPublicGame(currentGame, seat) });
+        await refreshSpectator();
+        if (closed) return;
+        if (seatFor(currentGame) === 0 && currentGame.waiting && authMode() !== "invite") await redis.zadd(LOBBY_KEY(currentGame.ruleset), Date.now(), currentGame.id);
+        send({ type: "game", game: toPublicGame(currentGame, seatFor(currentGame)) });
 
         heartbeat = setInterval(() => void (async () => {
           if (closed) return;
-          try {
-            const now = Date.now();
-            await redis.zadd(PRESENCE_KEY, now, player.id);
-            if (currentGame.status === "playing") {
-              const opponent = initial.players[1 - seat];
-              const expired = await redis.eval(
-                EXPIRE_STALE_GAME,
-                3,
-                key,
-                PRESENCE_KEY,
-                USERS_KEY,
-                opponent.id,
-                String(now - RECONNECT_GRACE_MS),
-                initial.players[seat].id,
-              );
-              if (expired === 1) {
-                await publishGameEnded(params.id, "The opponent did not reconnect in time.");
-                return;
-              }
-              if (expired === -1) {
-                send({ type: "ended", message: "The game is no longer available." });
-                finish();
-                return;
-              }
+          await refreshSpectator();
+          if (closed) return;
+          const now = Date.now();
+          const seat = seatFor(currentGame);
+          if (seat !== null) await redis.zadd(PRESENCE_KEY, now, player!.id);
+          if (seatFor(currentGame) === 0 && currentGame.waiting && authMode() !== "invite") await redis.zadd(LOBBY_KEY(currentGame.ruleset), now, currentGame.id);
+          if (seat !== null && currentGame.status === "playing" && !currentGame.computer && !currentGame.waiting) {
+            const opponent = currentGame.players[1 - seat];
+            const expired = await endGame(currentGame, "The opponent did not reconnect in time.", opponent.id);
+            if (expired === 1) return;
+            if (expired === -1) {
+              send({ type: "ended", message: "The game is no longer available." });
+              finish();
+              return;
             }
-            if (!closed) controller.enqueue(encoder.encode(": ping\n\n"));
-          } catch {
-            if (!closed) controller.enqueue(encoder.encode(": retry\n\n"));
           }
-        })(), 15_000);
-      })().catch(() => finish());
+          if (!closed) controller.enqueue(encoder.encode(": ping\n\n"));
+        })().catch(fail), 15_000);
+      })().catch(fail);
     },
     cancel() { cleanup(); },
   });

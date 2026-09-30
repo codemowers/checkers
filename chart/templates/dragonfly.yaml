@@ -3,10 +3,11 @@ kind: Dragonfly
 metadata:
   name: checkers-redis
 spec:
-  replicas: 1
-  args:
-    - "--bind=::"
-    - "--admin_bind=::"
+  image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.37.0
+  authentication:
+    passwordFromSecret:
+      name: checkers-redis-auth
+      key: password
   resources:
     requests:
       cpu: 50m
