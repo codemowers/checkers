@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { anonymousIcon } from "../lib/anonymous-names";
 import { ROBOT_ICON } from "../lib/computer-names";
-import { RULESETS } from "../lib/rulesets";
+import { capturedCounts } from "../lib/piece-counts";
 import type { PublicGame } from "../lib/types";
 
 export function PlayerAvatar({ src, name, computer }: { src?: string | null; name?: string; computer?: boolean }) {
@@ -15,9 +15,7 @@ export function PlayerAvatar({ src, name, computer }: { src?: string | null; nam
 }
 
 export function PlayerHeader({ game, playerAvatar }: { game: PublicGame; playerAvatar?: string | null }) {
-  const pieces = game.board.flat();
-  const starting = RULESETS[game.ruleset].pieces;
-  const captured = [starting - pieces.filter((p) => p === 2 || p === 4).length, starting - pieces.filter((p) => p === 1 || p === 3).length];
+  const captured = capturedCounts(game);
   const first = game.you ?? 0;
   return <div className="nav-match">
     {[first, 1 - first].map((side, index) => <Fragment key={side}>

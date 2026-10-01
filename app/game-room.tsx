@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { anonymousIcon, randomName } from "../lib/anonymous-names";
 import { fetchResponse, readJson, readChunk, NetworkError, RequestError } from "../lib/http-client";
+import { acceptSnapshot } from "../lib/game-snapshot";
 import { predictMove } from "../lib/board-playback";
 import type { Ruleset } from "../lib/rulesets";
 import { toPublicGame } from "../lib/public-game";
@@ -26,9 +27,8 @@ function localPlayerId() {
   return id;
 }
 
-export default function GameRoom({ initialGameId, playerName, playerAvatar, anonymous, allowSignIn, inviteOnly, enableComputer, enableDemo, allowSpectators }: { initialGameId?: string; playerName?: string; playerAvatar?: string | null; anonymous: boolean; allowSignIn: boolean; inviteOnly: boolean; enableComputer: boolean; enableDemo: boolean; allowSpectators: boolean }) {
+export default function GameRoom({ initialGameId, playerName, playerAvatar, anonymous, allowSignIn, inviteOnly, enableMatchmaking, enableComputer, enableDemo, allowSpectators }: { initialGameId?: string; playerName?: string; playerAvatar?: string | null; anonymous: boolean; allowSignIn: boolean; inviteOnly: boolean; enableMatchmaking: boolean; enableComputer: boolean; enableDemo: boolean; allowSpectators: boolean }) {
   const [streamVersion, setStreamVersion] = useState(0);
-  const [watching, setWatching] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [savingName, setSavingName] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -40,12 +40,20 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
   const [lobby, setLobby] = useState(!initialGameId);
   const [gameId, setGameId] = useState<string | undefined>(initialGameId);
   const [game, setGame] = useState<PublicGame>();
+  const [offer, setOffer] = useState<PublicGame>();
+  const [openingChoice, setOpeningChoice] = useState<"find" | "invite" | "computer">("find");
+  const activeGameId = useRef(gameId);
+  const receiveGame = useCallback((incoming: PublicGame) => {
+    if (incoming.id !== activeGameId.current) return;
+    setGame(current => acceptSnapshot(current, incoming));
+  }, []);
+  const watching = game?.you === null;
   const [optimistic, setOptimistic] = useState<PublicGame>();
   useEffect(() => { if (game) setOptimistic(undefined); }, [game]);
-  const [shareMessage, setShareMessage] = useState("");
+  const [shareMessage, setShareMessage] = useState<{ text: string; copied?: boolean }>();
   useEffect(() => {
     if (!shareMessage) return;
-    const timer = setTimeout(() => setShareMessage(""), 3000);
+    const timer = setTimeout(() => setShareMessage(undefined), 3000);
     return () => clearTimeout(timer);
   }, [shareMessage]);
   const [message, setMessage] = useState(initialGameId ? "Reconnecting to the table…" : "Taking a seat at the next open table…");
@@ -62,6 +70,12 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     table.players = [{ id: "", name: displayName || "You" }, { id: "", name: "Opponent" }];
     return toPublicGame(table, 0);
   }, [displayName, ruleset]);
+
+  useEffect(() => {
+    const choice = sessionStorage.getItem("checkers-opening-choice");
+    sessionStorage.removeItem("checkers-opening-choice");
+    if (!initialGameId && (choice === "invite" || choice === "computer")) setOpeningChoice(choice);
+  }, [initialGameId]);
 
   useEffect(() => {
     if (!anonymous) return;
@@ -85,13 +99,65 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     };
   }, [anonymous, displayName]);
 
+  useEffect(() => {
+    if (!enableMatchmaking || !lobby || gameId || openingChoice !== "find" || demo || matchBusy || (anonymous && !anonymousName)) return;
+    const aborter = new AbortController();
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const connect = async () => {
+      try {
+        const response = await fetchResponse(`/api/game/match?ruleset=${ruleset}`, { headers: headers(), signal: aborter.signal });
+        if (response.status === 403) { setOffer(undefined); return; }
+        if (!response.ok || !response.body) throw new RequestError("Lobby stream unavailable.");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!stopped) {
+          const { done, value } = await readChunk(reader);
+          if (done || stopped) break;
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+          let boundary = buffer.indexOf("\n\n");
+          while (boundary >= 0) {
+            const block = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            const data = block.split("\n").filter(line => line.startsWith("data: ")).map(line => line.slice(6)).join("\n");
+            if (data && !busy.current && !activeGameId.current) {
+              const result = JSON.parse(data) as { game: PublicGame | null };
+              setOffer(current => result.game ? (!current || current.id !== result.game.id ? result.game : acceptSnapshot(current, result.game)) : undefined);
+            }
+            boundary = buffer.indexOf("\n\n");
+          }
+        }
+      } catch (error) {
+        if (aborter.signal.aborted) return;
+        if (!(error instanceof NetworkError || error instanceof RequestError)) throw error;
+      }
+      if (!stopped) timer = setTimeout(() => void connect(), 1500);
+    };
+    void connect();
+    return () => { stopped = true; aborter.abort(); if (timer) clearTimeout(timer); };
+  }, [enableMatchmaking, lobby, gameId, openingChoice, demo, matchBusy, anonymous, anonymousName, ruleset, headers]);
+
+  useEffect(() => { setMatchError(""); }, [offer?.id]);
+
   const adoptGame = useCallback((id: string) => {
+    activeGameId.current = id;
     setGameId(id);
     setLobby(false);
     history.replaceState(null, "", `/games/${id}`);
   }, []);
 
-  const openTable = async (opening: Move) => {
+  const requestSeat = async (id: string, opponent: "human" | "computer") => {
+    const response = await fetchResponse(`/api/game/games/${id}/join`, {
+      method: "POST", headers: headers(true), body: JSON.stringify({ opponent }),
+    });
+    if (response.status === 401) { location.href = `/signin?callbackUrl=${encodeURIComponent(`/games/${id}`)}`; return; }
+    const result = await readJson<PublicGame & { error?: string }>(response);
+    if (!response.ok) throw new RequestError(result.error ?? "Could not join the table.");
+    return result;
+  };
+
+  const openTable = async (opening: Move, choice = openingChoice) => {
     if (busy.current) return;
     busy.current = true;
     setMatchBusy(true);
@@ -99,67 +165,58 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     setOptimistic(predictMove(preview, opening));
     try {
       const response = await fetchResponse("/api/game/match", {
-        method: "POST", headers: headers(true), body: JSON.stringify({ ruleset, opening }),
+        method: "POST", headers: headers(true), body: JSON.stringify({ ruleset, opening, invite: choice !== "find" }),
       });
       if (response.status === 401) { location.href = "/signin"; return; }
       const result = await readJson(response);
       if (!response.ok) throw new RequestError(result.error ?? "Could not open a table.");
+      if (result.status === "offer") {
+        setOffer(result.game);
+        setOptimistic(undefined);
+        return;
+      }
+      setOffer(undefined);
       adoptGame(result.gameId);
+      if (choice === "computer") {
+        const joined = await requestSeat(result.gameId, "computer");
+        if (joined) receiveGame(joined);
+      }
     } catch (error) {
       if (!(error instanceof NetworkError || error instanceof RequestError)) throw error;
       setOptimistic(undefined); setMatchError(error instanceof Error ? error.message : "Could not connect. Try your move again."); }
     finally { busy.current = false; setMatchBusy(false); }
   };
 
-  const chooseComputer = async () => {
-    if (!gameId || busy.current) return;
+  const joinTable = async (opponent: "human" | "computer") => {
+    const id = offer?.id ?? gameId;
+    if (!id || busy.current) return;
     busy.current = true;
     setMatchBusy(true);
     setMatchError("");
     try {
-      const response = await fetchResponse(`/api/game/games/${gameId}/join`, {
-        method: "POST", headers: headers(true), body: JSON.stringify({ opponent: "computer" }),
-      });
-      const result = await readJson(response);
-      if (!response.ok) {
-        throw new RequestError(result.error ?? "Could not join the table.");
-      }
-      setGame(result);
+      const result = await requestSeat(id, opponent);
+      if (!result) return;
+      if (offer) { adoptGame(id); setOffer(undefined); }
+      receiveGame(result);
+      if (opponent === "human") setStreamVersion(value => value + 1);
     } catch (error) {
       if (!(error instanceof NetworkError || error instanceof RequestError)) throw error;
-      setMatchError(error instanceof Error ? error.message : "Could not connect. Please try again."); }
-    finally { busy.current = false; setMatchBusy(false); }
-  };
-
-  const takeSeat = async () => {
-    if (!gameId || busy.current) return;
-    busy.current = true;
-    setMatchBusy(true);
-    setMatchError("");
-    try {
-      const response = await fetchResponse(`/api/game/games/${gameId}/join`, {
-        method: "POST", headers: headers(true), body: JSON.stringify({ opponent: "human" }),
-      });
-      if (response.status === 401) { location.href = `/signin?callbackUrl=${encodeURIComponent(`/games/${gameId}`)}`; return; }
-      const result = await readJson(response);
-      if (!response.ok) throw new RequestError(result.error ?? "Could not take this seat.");
-      setGame(result);
-      setWatching(false);
-      setStreamVersion(value => value + 1);
-    } catch (error) {
-      if (!(error instanceof NetworkError || error instanceof RequestError)) throw error;
-      setMatchError(error instanceof Error ? error.message : "Could not take this seat.");
+      setMatchError(error.message);
     } finally { busy.current = false; setMatchBusy(false); }
   };
 
   const share = async () => {
     const url = `${location.origin}/games/${gameId}`;
+    if (!navigator.clipboard) {
+      setShareMessage({ text: "Clipboard unavailable. Copy the game link from your address bar." });
+      return;
+    }
     try {
-      if (navigator.share) await navigator.share({ title: "Checkers", url });
-      else { await navigator.clipboard.writeText(url); setShareMessage("Link copied."); }
+      await navigator.clipboard.writeText(url);
+      setShareMessage({ text: "Link copied", copied: true });
     } catch (error) {
       if (!(error instanceof DOMException) || !["AbortError", "NotAllowedError", "InvalidStateError", "DataError"].includes(error.name)) throw error;
-      if (error.name !== "AbortError") setShareMessage("Could not share the game. Please try again.");
+      if (error.name !== "AbortError") setShareMessage({ text: "Could not copy the link. Please try again." });
     }
   };
 
@@ -170,6 +227,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     let retry: ReturnType<typeof setTimeout> | undefined;
     const end = (text: string) => {
       stopped = true;
+      activeGameId.current = undefined;
       setGame(undefined);
       setGameId(undefined);
       setLobby(false);
@@ -188,8 +246,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
           const result = await readJson(joined);
           if (stopped || aborter.signal.aborted) return;
           if (joined.ok) {
-            setGame(result);
-            setWatching(false);
+            receiveGame(result);
             retry = setTimeout(connect, 0);
             return;
           }
@@ -215,8 +272,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
             if (data) {
               const event = JSON.parse(data) as GameEvent;
               if (event.type === "ended") { end(event.message); aborter.abort(); return; }
-              setWatching(event.game.you === null);
-              setGame((current) => !current || current.id !== event.game.id || event.game.revision > current.revision ? event.game : current);
+              receiveGame(event.game);
             }
             boundary = buffer.indexOf("\n\n");
           }
@@ -235,7 +291,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
       aborter.abort();
       if (retry) clearTimeout(retry);
     };
-  }, [anonymous, anonymousName, gameId, headers, streamVersion]);
+  }, [anonymous, anonymousName, gameId, headers, streamVersion, receiveGame]);
 
   useEffect(() => {
     document.title = game?.waiting ? "Waiting for an opponent · Checkers" : game?.status === "playing"
@@ -251,12 +307,12 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
       const response = await fetchResponse(`/api/game/games/${game.id}/moves`, { method: "POST", headers: headers(true), body: JSON.stringify(proposed) });
       const result = await readJson(response);
       if (!response.ok) { setOptimistic(undefined); setMessage(result.error ?? "That move is not allowed."); }
-      else { setGame((current) => !current || result.revision >= current.revision ? result : current); setOptimistic(undefined); setHasMoved(true); setMessage(""); }
+      else { receiveGame(result); setOptimistic(undefined); setHasMoved(true); }
     } catch (error) {
       if (!(error instanceof NetworkError)) throw error;
       try {
         const response = await fetchResponse(`/api/game/games/${game.id}`, { headers: headers() });
-        if (response.ok) setGame(await readJson(response));
+        if (response.ok) receiveGame(await readJson(response));
       } catch (error) {
         if (!(error instanceof NetworkError)) throw error;
         // Keep the confirmed board while the stream reconnects.
@@ -264,7 +320,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
       finally { setOptimistic(undefined); setMessage("Connection interrupted. Check the board before retrying."); }
     }
     finally { setMoving(false); }
-  }, [game, moving, headers]);
+  }, [game, moving, headers, receiveGame]);
 
   useEffect(() => {
     if (!game) return;
@@ -272,7 +328,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     if (you === null) {
       setMessage(game.status === "finished"
         ? game.winner == null ? "Draw." : `${game.players[game.winner].name} wins.`
-        : game.waiting ? "Watching — waiting for an opponent." : `Watching — ${game.players[game.turn].name} to move.`);
+        : game.waiting ? `${game.players[0].name} wants to play with you. Do you accept?` : `Watching — ${game.players[game.turn].name} to move.`);
       return;
     }
     if (game.status === "finished") {
@@ -301,7 +357,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
         });
         const result = await readJson(response);
         if (!response.ok) throw new RequestError(result.error ?? "Could not change your name.");
-        setGame(current => !current || result.revision >= current.revision ? result : current);
+        receiveGame(result);
       }
       sessionStorage.setItem("checkers-name", name);
       setDraftName(name);
@@ -313,14 +369,20 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     } finally { setSavingName(false); }
   };
 
-  const participate = () => {
-    if (inviteOnly && anonymous) { location.href = "/signin?callbackUrl=%2F"; return; }
+  const participate = (choice: "find" | "invite" | "computer" = "find") => {
+    if (inviteOnly && anonymous) {
+      sessionStorage.setItem("checkers-opening-choice", choice);
+      location.href = "/signin?callbackUrl=%2F";
+      return;
+    }
     history.replaceState(null, "", "/");
+    activeGameId.current = undefined;
     setGame(undefined);
+    setOffer(undefined);
+    setOpeningChoice(choice);
     setOptimistic(undefined);
     setGameId(undefined);
-    setWatching(false);
-    setShareMessage("");
+    setShareMessage(undefined);
     setMatchError("");
     setMessage("Taking a seat at the next open table…");
     setLobby(true);
@@ -338,11 +400,21 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     }
   };
 
-  const displayed = optimistic ?? game;
+  const inviteSomeoneElse = (choice: "invite" | "computer") => {
+    participate(choice);
+  };
+
+  const displayed = optimistic ?? game ?? offer ?? (lobby && !gameId ? preview : undefined);
   const turnClass = game?.you != null && game.status === "playing" ? (game.turn === game.you ? "your-turn" : "opponent-turn") : "";
-  const waitingForOpponent = lobby && !gameId;
+  const waitingForOpponent = lobby && !gameId && !offer;
 
   const signInUrl = `/signin?callbackUrl=${encodeURIComponent(gameId ? `/games/${gameId}` : "/")}`;
+
+  const invitationActions = <div className="lobby-actions">
+    <button disabled={matchBusy} onClick={() => void joinTable("human")}>{matchBusy ? "Joining…" : "Accept"}</button>
+    <button disabled={matchBusy} onClick={() => inviteSomeoneElse("invite")}>{offer ? "Start a new game" : "Invite someone else"}</button>
+    {enableComputer && <button disabled={matchBusy} onClick={() => inviteSomeoneElse("computer")}>Play against computer instead</button>}
+  </div>;
 
   const identityActions = <>
     {anonymous && anonymousName && <button type="button" onClick={() => { setDraftName(anonymousName); setNameError(""); setEditingName(true); }}>Change name</button>}
@@ -371,7 +443,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
         : <div className="identity"><PlayerAvatar src={playerAvatar} name={anonymous ? anonymousName || draftName : undefined} />{displayName || "Anonymous player"}</div>}
       <div className="nav-actions">
         {!watching && (!gameId || game?.you != null) && identityActions}
-        {game?.you != null && !game.waiting && allowSpectators && <button onClick={() => void share()}>Share game</button>}
+        {game?.you != null && !game.waiting && allowSpectators && <button aria-live="polite" onClick={() => void share()}>{shareMessage?.copied ? "Link copied" : "Share game"}</button>}
         {game?.you != null && game.status === "playing" && <button className="quit" onClick={quit}>Quit game</button>}
       </div>
     </header>
@@ -379,27 +451,30 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     <section className="game-shell">
       <div className="table-wrap">
         {displayed
-          ? <Board key={`${displayed.id}:${displayed.you ?? "spectator"}`} game={displayed} player={displayed.you ?? 1} autoOrbit={displayed.you === null} onMove={move} disabled={displayed.you === null || moving || !!displayed.waiting || matchBusy || !!optimistic} />
-          : waitingForOpponent
-            ? <Board game={preview} player={0} onMove={openTable} disabled={matchBusy || (anonymous && !anonymousName)} />
+          ? <Board game={displayed} player={displayed.you ?? 1} offering={!!offer} autoOrbit={!offer && displayed.you === null} onMove={waitingForOpponent ? openTable : move} disabled={displayed.you === null || moving || !!displayed.waiting || matchBusy || !!optimistic || (anonymous && !anonymousName)} />
             : gameId
               ? <WaitingTable />
-              : <EndedTable message={message} onRestart={participate} />}
+              : <EndedTable message={message} onRestart={() => participate()} />}
       </div>
     </section>
 
     {game && <div className="status-card bottom-status">
-      <p aria-live="polite">{matchError || shareMessage || message}</p>
-      {game.waiting && game.you === null && <button disabled={matchBusy} onClick={takeSeat}>{matchBusy ? "Joining…" : `Play against ${game.players[0].name}`}</button>}
+      <p aria-live="polite">{matchError || (!shareMessage?.copied && shareMessage?.text) || message}</p>
+      {game.waiting && game.you === null && invitationActions}
       {game.waiting && game.you === 0 && <div className="lobby-actions">
-        <button onClick={() => void share()}>Invite</button>
-        {enableComputer && <button disabled={matchBusy} onClick={() => void chooseComputer()}>{matchBusy ? "Joining…" : "Play computer instead"}</button>}
+        <button aria-live="polite" onClick={() => void share()}>{shareMessage?.copied ? "Link copied" : "Invite"}</button>
+        {enableComputer && <button disabled={matchBusy} onClick={() => void joinTable("computer")}>{matchBusy ? "Joining…" : "Play against computer instead"}</button>}
       </div>}
-      {game.status === "finished" && !watching && <button onClick={participate}>Play again</button>}
+      {game.status === "finished" && !watching && <button onClick={() => participate()}>Play again</button>}
+    </div>}
+
+    {offer && <div className="status-card bottom-status">
+      <p aria-live="polite">{matchError || `${offer.players[0].name} wants to play with you. Do you accept?`}</p>
+      {invitationActions}
     </div>}
 
     {waitingForOpponent && <div className="status-card bottom-status">
-      <p aria-live="polite">{matchError || (matchBusy ? "Taking your seat…" : inviteOnly ? "Make your opening move, then share the game link to invite someone." : "Make your opening move. We’ll find you an opponent.")}</p>
+      <p aria-live="polite">{matchError || (matchBusy ? "Taking your seat…" : openingChoice === "computer" ? "Make your opening move to play against the computer." : !enableMatchmaking || openingChoice === "invite" ? "Make your opening move, then share the game link to invite someone." : "Looking for a waiting opponent. Make an opening move to start your own game.")}</p>
       <div className="lobby-actions">
         <button type="button" disabled={matchBusy} onClick={() => setRuleset(ruleset === "english" ? "international" : "english")}>
           Switch to {ruleset === "english" ? "international" : "English"} rules

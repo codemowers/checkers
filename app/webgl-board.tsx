@@ -6,16 +6,22 @@ import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import { playbackFrames, sameBoard, type BoardFrame } from "../lib/board-playback";
+import { useBoardPlayback } from "../lib/use-board-playback";
+import { capturedCounts } from "../lib/piece-counts";
+import { RULESETS } from "../lib/rulesets";
+import { advanceTableAngle } from "../lib/table-orientation";
 import { captureSources, legalTargets, owner, same } from "../lib/rules";
 import { CAPTURE_SCALE, capturedLayout } from "../lib/captured-layout";
 import { soleLegalMove, isMoveShortcut } from "../lib/move-shortcuts";
 import type { Move, Position, PublicGame } from "../lib/types";
 
-type Props = { game: PublicGame; player: number; onMove: (move: Move) => void; disabled: boolean; autoOrbit?: boolean; orbitPaused?: boolean };
+type Props = { game: PublicGame; player: number; onMove: (move: Move) => void; disabled: boolean; offering?: boolean; autoOrbit?: boolean; orbitPaused?: boolean };
 
 /** The lamp hangs here; the beam, the bulb and the dust in it all key off this height. */
 const LAMP_HEIGHT = 5.9;
+const LAMP_BEAM_ANGLE = 1.12;
+// Beyond the camera's far plane, so no table edge enters the view.
+const FELT_SIZE = 200;
 const SHADE_HEIGHT = 0.84;
 const CEILING = 9;
 const SHAFT_STRENGTH = 0.14;
@@ -32,7 +38,7 @@ const cueLift = (time: number, calm: boolean) => 0.26 + 0.58 * breathe(time, cal
 /** Where the overhead view settles: shy of the pole, where roll is still defined. */
 const OVERHEAD = 0.02;
 /** How wide the lamplight is at a given height: widest at the table, pinched at the bulb. */
-const beamRadius = (height: number) => 0.42 + Math.max(0, LAMP_HEIGHT - height) * 0.6;
+const beamRadius = (height: number) => 0.42 + Math.max(0, LAMP_HEIGHT - height) * Math.tan(LAMP_BEAM_ANGLE * 0.72);
 /**
  * A draughts piece in profile, to be revolved: flat base, rounded shoulders,
  * slightly proud top. A bare cylinder has a hard rim no moulded piece has, and
@@ -77,24 +83,22 @@ const ICE: { at: [number, number, number]; turn: [number, number, number]; size:
   { at: [-0.12, 0.25, 0.09], turn: [-0.22, 0.95, 0.38], size: 0.2 },
 ];
 
-/**
- * The wood grain is a build-time download, not a checked-in asset, so the board
- * has to look right without it. A missing file just leaves the flat colours.
- */
-function useWoodGrain(url: string, repeat = 2) {
-  const [texture, setTexture] = useState<THREE.Texture>();
+// Share the load across board mounts; never reveal an untextured first frame.
+let woodGrain: Promise<THREE.Texture | null> | undefined;
+function useWoodGrain() {
+  const [texture, setTexture] = useState<THREE.Texture | null>();
   useEffect(() => {
     let live = true;
-    new THREE.TextureLoader().load(url, (loaded) => {
-      if (!live) return void loaded.dispose();
+    woodGrain ??= new THREE.TextureLoader().loadAsync("/textures/wood-table-001.jpg").then(loaded => {
       loaded.wrapS = loaded.wrapT = THREE.RepeatWrapping;
-      loaded.repeat.set(repeat, repeat);
+      loaded.repeat.set(2, 2);
       loaded.colorSpace = THREE.SRGBColorSpace;
       loaded.anisotropy = 8;
-      setTexture(loaded);
-    }, undefined, () => {});
+      return loaded;
+    }).catch(() => null); // A missing development asset must not block play.
+    void woodGrain.then(loaded => { if (live) setTexture(loaded); });
     return () => { live = false; };
-  }, [url, repeat]);
+  }, []);
   return texture;
 }
 
@@ -176,15 +180,15 @@ function feltTexture() {
   context.putImageData(weave, 0, 0);
   feltSprite = new THREE.CanvasTexture(canvas);
   feltSprite.wrapS = feltSprite.wrapT = THREE.RepeatWrapping;
-  feltSprite.repeat.set(34, 34);
+  feltSprite.repeat.set(FELT_SIZE * 34 / 19, FELT_SIZE * 34 / 19);
   feltSprite.anisotropy = 4;
   return feltSprite;
 }
 
 /**
  * The soft dark pool the board sits in. This was a per-frame contact-shadow
- * pass, which is what blanked the canvas; nothing under here ever moves, so a
- * drawn-once decal buys the same weight — and the same falloff across the
+ * pass, which is what blanked the canvas. A decal attached to the board
+ * follows its rotation and keeps the same falloff across the
  * cloth, which was carrying more of the mood than it looked like.
  */
 let contactSprite: THREE.CanvasTexture | undefined;
@@ -251,12 +255,27 @@ function CameraRig({ autoOrbit = false }: { autoOrbit?: boolean }) {
   return <PerspectiveCamera ref={camera} makeDefault position={position} near={0.5} far={80} fov={compact ? 47 : 43} />;
 }
 
-function TableControls({ autoOrbit = false, orbitPaused = false }: { autoOrbit?: boolean; orbitPaused?: boolean }) {
+function TableControls({ autoOrbit = false, orbitPaused = false, seatAngle, calm }: { autoOrbit?: boolean; orbitPaused?: boolean; seatAngle: { current: number }; calm: boolean }) {
   const controls = useRef<OrbitControlsImpl>(null);
   const { camera, gl, size } = useThree();
   /** Wheel zoom, on top of the fit. 1 is the whole board; above that, closer in. */
   const closeness = useRef(1);
+  const previousAngle = useRef(seatAngle.current);
+  const restingTilt = useRef<number | undefined>(undefined);
   useFrame((_, delta) => {
+    const control = controls.current;
+    if (control) {
+      const angle = seatAngle.current;
+      if (angle !== previousAngle.current && !calm) restingTilt.current ??= control.getPolarAngle();
+      if (restingTilt.current !== undefined) {
+        const lift = calm ? 0 : Math.sin(angle) ** 2;
+        control.setPolarAngle(THREE.MathUtils.lerp(restingTilt.current, Math.max(OVERHEAD, restingTilt.current - 0.45), lift));
+        control.update();
+        if (calm || angle === 0 || angle === Math.PI) restingTilt.current = undefined;
+      }
+      control.enabled = restingTilt.current === undefined;
+      previousAngle.current = angle;
+    }
     // Keep the slow demo orbit consistent across display refresh rates.
     if (autoOrbit && controls.current) controls.current.autoRotateSpeed = 0.25 * Math.min(delta, 0.1) * 60;
   });
@@ -610,8 +629,9 @@ function Espresso({ calm }: { calm: boolean }) {
       <cylinderGeometry args={[0.37, 0.335, 0.2, 28]} />
       <meshStandardMaterial color="#3a2110" roughness={0.16} metalness={0.1} />
     </mesh>
-    <mesh position={[0.43, 0.22, 0]} castShadow>
-      <torusGeometry args={[0.13, 0.026, 8, 18]} />
+    {/* A vertical half-loop joins the outer wall at both ends. */}
+    <mesh position={[0.36, 0.23, 0]} rotation={[0, 0, -Math.PI / 2]} castShadow>
+      <torusGeometry args={[0.15, 0.032, 10, 24, Math.PI]} />
       <meshStandardMaterial {...china} />
     </mesh>
     <group ref={steam}>{[0, 1, 2].map((wisp) => <sprite key={wisp}>
@@ -726,36 +746,6 @@ function Piece({ cameraGesture, size, piece, position, selected, required, canSe
   </group>;
 }
 
-/** Play every authoritative move in order; acknowledgements never replay a predicted move. */
-function useBoardPlayback(target: PublicGame, calm: boolean) {
-  const [frame, setFrame] = useState<BoardFrame>({ game: target, captured: [] });
-  const latest = useRef(target);
-  const queue = useRef<BoardFrame[]>([]);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const advance = useCallback(() => {
-    const next = queue.current.shift();
-    if (!next) { timer.current = undefined; setFrame((last) => ({ game: last.game, captured: [] })); return; }
-    setFrame(next);
-    const duration = next.captured.length ? 900 : next.promoted ? 750 : next.move ? 450 : 0;
-    timer.current = setTimeout(advance, calm ? Math.min(duration, 80) : duration);
-  }, [calm]);
-  useLayoutEffect(() => {
-    const before = latest.current;
-    if (before === target) return;
-    latest.current = target;
-    if (before.id !== target.id && !sameBoard(before, target)) {
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = undefined; queue.current = [];
-      setFrame({ game: target, captured: [] });
-      return;
-    }
-    queue.current.push(...playbackFrames(before, target));
-    if (!timer.current) advance();
-  }, [target, advance]);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  return { frame, animating: !!frame.move || queue.current.length > 0 };
-}
-
 function FlyingCapture({ piece, from, to, cell, calm, spin }: { piece: number; from: [number, number, number]; to: [number, number, number]; cell: number; calm: boolean; spin: number }) {
   const ref = useRef<THREE.Group>(null);
   const progress = useRef(0);
@@ -794,9 +784,23 @@ function TargetShadow({ at, calm, size }: { at: Position; calm: boolean; size: n
   </mesh>;
 }
 
-function Table({ game: target, player, onMove, disabled, cameraGesture }: Props & { cameraGesture: { current: boolean } }) {
+function Table({ game: target, player, onMove, disabled, offering = false, cameraGesture, wood, seatAngle }: Props & { cameraGesture: { current: boolean }; wood: THREE.Texture | null; seatAngle: { current: number } }) {
   const calmMotion = useCalm();
-  const { frame, animating } = useBoardPlayback(target, calmMotion);
+  const { frame, animating: playingMove } = useBoardPlayback(target, calmMotion);
+  const table = useRef<THREE.Group>(null);
+  const initialAngle = useRef(offering ? 0 : player === 1 ? Math.PI : 0);
+  const [turning, setTurning] = useState(offering);
+  const animating = playingMove || turning;
+  useLayoutEffect(() => {
+    const destination = offering || player === 1 ? Math.PI : 0;
+    setTurning(!!table.current && table.current.rotation.y !== destination);
+  }, [offering, player]);
+  useFrame((_, delta) => {
+    if (!table.current) return;
+    table.current.rotation.y = advanceTableAngle(table.current.rotation.y, player, offering, delta, calmMotion);
+    seatAngle.current = table.current.rotation.y;
+    if (turning && table.current.rotation.y === (offering || player === 1 ? Math.PI : 0)) setTurning(false);
+  });
   const game = frame.game;
   const { gl } = useThree();
   const shortcutRevision = useRef<string | undefined>(undefined);
@@ -828,8 +832,7 @@ function Table({ game: target, player, onMove, disabled, cameraGesture }: Props 
   const size = game.board.length;
   const cell = 8 / size;
   const center = (size - 1) / 2;
-  const startingPieces = size * (size / 2 - 1) / 2;
-  const wood = useWoodGrain("/textures/wood-table-001.jpg");
+  const startingPieces = RULESETS[game.ruleset].pieces;
   const arriving = frame.move;
   const landing = useMemo<Landing | undefined>(() => {
     if (!arriving) return undefined;
@@ -849,8 +852,7 @@ function Table({ game: target, player, onMove, disabled, cameraGesture }: Props 
   }, [game.id, game.revision, game.turn, player]);
   const legal = selected ? legalTargets(game, player, selected) : [];
   // What each side has taken, excluding pieces still blocking a chained capture.
-  const live = game.board.flat();
-  const taken = [startingPieces - live.filter((disc) => disc === 2 || disc === 4).length, startingPieces - live.filter((disc) => disc === 1 || disc === 3).length];
+  const taken = capturedCounts(game);
   // Each captor's left is opposite in board space; rotating the board for
   // black also brings black's collection to the left of their view.
   const captures = useMemo(() => [
@@ -869,7 +871,11 @@ function Table({ game: target, player, onMove, disabled, cameraGesture }: Props 
     onMove({ from, to }); setSelected(undefined);
     return true;
   }
-  return <group rotation={[0, player === 1 ? Math.PI : 0, 0]}>
+  return <group ref={table} rotation={[0, initialAngle.current, 0]}>
+    <mesh position={[0, -0.3555, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={-1}>
+      <planeGeometry args={[14, 14]} />
+      <meshBasicMaterial map={contactTexture()} color="#000000" transparent opacity={0.62} depthWrite={false} />
+    </mesh>
     <Tumbler calm={calmMotion} />
     <Espresso calm={calmMotion} />
     <mesh position={[0, -0.18, 0]} receiveShadow castShadow>
@@ -898,7 +904,7 @@ function Table({ game: target, player, onMove, disabled, cameraGesture }: Props 
       const position = { row: r, col: c };
       const mustMoveThisPiece = requiredSources.some((source) => same(source, position));
       const canSelect = !disabled && !animating && game.turn === player && owner(piece) === player && (!requiredSources.length || mustMoveThisPiece);
-      return <group key={`${r}-${c}`}>
+      return <group key={`${game.id}:${r}-${c}`}>
         <mesh position={[(c - center) * cell, 0.015, (r - center) * cell]} receiveShadow onClick={(event) => { event.stopPropagation(); chooseSquare(position); }}>
           <boxGeometry args={[cell - 0.01, 0.06, cell - 0.01]} />
           <meshStandardMaterial color={tone} roughness={0.62} envMapIntensity={0.12} map={dark ? wood : undefined} />
@@ -927,8 +933,7 @@ function RoomReflections() {
 
 /**
  * The room the board sits in. Everything here is world-fixed rather than part
- * of the board group, so the lamp stays overhead and the drink stays on the
- * near side of the table for both seats.
+ * of the board group, so the lamp and felt stay put during seat transitions.
  */
 function BarRoom({ calm, theirs }: { calm: boolean; theirs: boolean }) {
   const cloth = useRef<THREE.MeshPhysicalMaterial>(null);
@@ -943,12 +948,8 @@ function BarRoom({ calm, theirs }: { calm: boolean; theirs: boolean }) {
     {/* Casino baize: matte, so the lamp and the neon land on it as coloured
         washes instead of highlights, with a cloth sheen at grazing angles. */}
     <mesh position={[0, -0.358, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <planeGeometry args={[90, 90]} />
+      <planeGeometry args={[FELT_SIZE, FELT_SIZE]} />
       <meshPhysicalMaterial ref={cloth} map={feltTexture()} color="#17693b" roughness={0.95} metalness={0} envMapIntensity={0.06} sheen={0.6} sheenColor="#4f9c6a" sheenRoughness={0.75} />
-    </mesh>
-    <mesh position={[0, -0.3555, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={-1}>
-      <planeGeometry args={[14, 14]} />
-      <meshBasicMaterial map={contactTexture()} color="#000000" transparent opacity={0.62} depthWrite={false} />
     </mesh>
     <Pendant calm={calm} />
     <DustMotes calm={calm} />
@@ -958,10 +959,13 @@ function BarRoom({ calm, theirs }: { calm: boolean; theirs: boolean }) {
 
 export default function WebGLBoard(props: Props) {
   const calm = useCalm();
+  const wood = useWoodGrain();
+  const seatAngle = useRef(props.offering ? 0 : props.player === 1 ? Math.PI : 0);
   const touches = useRef(new Set<number>());
   const cameraGesture = useRef(false);
   const releaseTouch = (event: React.PointerEvent) => { touches.current.delete(event.pointerId); };
   const turn = props.game.you === null || props.game.status !== "playing" ? "idle" : props.game.turn === props.player ? "yours" : "theirs";
+  if (wood === undefined) return <div className="board-loading" role="status">Setting the table…</div>;
   return <div className="board-canvas" onContextMenu={(event) => event.preventDefault()}
     onPointerDownCapture={(event) => {
       if (!touches.current.size) cameraGesture.current = false;
@@ -975,17 +979,18 @@ export default function WebGLBoard(props: Props) {
     <Canvas shadows="soft" dpr={[1, 1.75]} gl={{ antialias: true, alpha: true }} onCreated={({ gl }) => { gl.toneMapping = THREE.ACESFilmicToneMapping; gl.toneMappingExposure = 1.04; }}>
       <fog attach="fog" args={["#07100a", 22, 46]} />
       <CameraRig autoOrbit={props.autoOrbit} />
-      <TableControls autoOrbit={props.autoOrbit} orbitPaused={props.orbitPaused} />
-      {/* One warm lamp does the work; the rest is spill, so the table falls off into the dark. */}
+      {/* Broad warm lamplight, with soft room fill and green bounce from the felt. */}
       {/* Filtered shadow maps stay stable as the demo camera circles the table. */}
       <RoomReflections />
-      <ambientLight intensity={0.24} color="#7c8894" />
+      <ambientLight intensity={0.4} color="#a5afbb" />
+      <hemisphereLight args={["#b9c8d6", "#35513b", 0.55]} />
       <directionalLight position={[-5, 6, 7]} intensity={0.2} color="#9db4c6" />
-      <spotLight castShadow position={[0, LAMP_HEIGHT, 0]} angle={0.9} penumbra={0.9} intensity={104} distance={22} decay={2} color="#ffc98a" shadow-mapSize={[2048, 2048]} shadow-camera-near={1} shadow-camera-far={16} shadow-bias={-0.00005} shadow-normalBias={0.003} />
+      <spotLight castShadow position={[0, LAMP_HEIGHT, 0]} angle={LAMP_BEAM_ANGLE} penumbra={0.9} intensity={104} distance={22} decay={2} color="#ffc98a" shadow-mapSize={[2048, 2048]} shadow-camera-near={1} shadow-camera-far={16} shadow-bias={-0.00005} shadow-normalBias={0.003} />
       <pointLight position={[2.6, 1.1, 5.2]} intensity={7} distance={13} decay={2} color="#ffb673" />
       <NeonWash calm={calm} />
       <BarRoom calm={calm} theirs={turn === "theirs"} />
-      <Table {...props} cameraGesture={cameraGesture} />
+      <Table {...props} cameraGesture={cameraGesture} wood={wood} seatAngle={seatAngle} />
+      <TableControls autoOrbit={props.autoOrbit} orbitPaused={props.orbitPaused} seatAngle={seatAngle} calm={calm} />
       {/* The bulb, its rim and the sparks in the beam are the only things over
           threshold, so the glow lands where a camera would blow out. */}
       <EffectComposer multisampling={4}>
