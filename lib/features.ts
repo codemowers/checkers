@@ -1,4 +1,4 @@
-function enabled(name: "ENABLE_COMPUTER" | "ENABLE_DEMO") {
+function enabled(name: "ENABLE_COMPUTER" | "ENABLE_DEMO" | "ENABLE_MATCHMAKING") {
   const value = process.env[name];
   if (value !== undefined && value !== "true" && value !== "false") {
     throw new Error(`${name} must be true or false`);
@@ -8,6 +8,7 @@ function enabled(name: "ENABLE_COMPUTER" | "ENABLE_DEMO") {
 
 export const computerEnabled = () => enabled("ENABLE_COMPUTER");
 export const demoEnabled = () => enabled("ENABLE_DEMO");
+export const matchmakingEnabled = () => enabled("ENABLE_MATCHMAKING");
 
 export type SpectatorMode = "disabled" | "invite";
 

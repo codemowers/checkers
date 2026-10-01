@@ -6,6 +6,10 @@ export type Game = {
   ruleset: Ruleset;
   computer?: boolean;
   waiting?: boolean;
+  /** Whether this table may be offered through automatic matchmaking. */
+  matchmaking?: boolean;
+  /** Time the opponent joined; starts the initial reconnect grace period. */
+  joinedAt?: number;
   captured?: Position[];
   repetitions?: Record<string, number>;
   endgamePlies?: number;

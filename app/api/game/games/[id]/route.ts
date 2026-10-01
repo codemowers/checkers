@@ -1,6 +1,5 @@
 import { spectatorMode } from "../../../../../lib/features";
-import { publishGame } from "../../../../../lib/game-events";
-import { RENAME_PLAYER } from "../../../../../lib/rename-player";
+import { saveGame } from "../../../../../lib/game-persistence";
 import { identity } from "../../../../../lib/identity";
 import { endGame } from "../../../../../lib/game-store";
 import { toPublicGame } from "../../../../../lib/public-game";
@@ -52,8 +51,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     game.players[seat].name = name;
     game.revision++;
     game.updatedAt = new Date().toISOString();
-    if (await redis.eval(RENAME_PLAYER, 1, GAME_KEY(id), raw, JSON.stringify(game)) === 1) {
-      await publishGame(game);
+    if (await saveGame(redis, GAME_KEY(id), raw, game, "preserve") === 1) {
       return Response.json(toPublicGame(game, seat as 0 | 1));
     }
   }

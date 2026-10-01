@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 vi.mock("./identity", () => ({ identity: vi.fn(async () => ({ id: "host", name: "Host" })) }));
 vi.mock("./redis", () => ({ redis: { get: vi.fn() } }));
-vi.mock("./game-events", () => ({ publishGame: vi.fn() }));
 import { POST } from "../app/api/game/games/[id]/join/route";
 import { redis } from "./redis";
 

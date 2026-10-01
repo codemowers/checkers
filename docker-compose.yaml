@@ -23,6 +23,7 @@ services:
       AUTH_MODE: anon
       ENABLE_COMPUTER: ${ENABLE_COMPUTER:-true}
       ENABLE_DEMO: ${ENABLE_DEMO:-true}
+      ENABLE_MATCHMAKING: ${ENABLE_MATCHMAKING:-true}
       SPECTATOR_MODE: ${SPECTATOR_MODE:-invite}
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     ports:

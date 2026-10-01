@@ -1,4 +1,3 @@
-import { redis } from "./redis";
 import type { Game } from "./types";
 
 /**
@@ -10,7 +9,4 @@ export type PublishedEvent =
   | { type: "ended"; message: string };
 
 export const gameChannel = (id: string) => `checkers:events:${id}`;
-
-export async function publishGame(game: Game) {
-  await redis.publish(gameChannel(game.id), JSON.stringify({ type: "game", game } satisfies PublishedEvent));
-}
+export const lobbyChannel = (ruleset: string) => `checkers:lobby-events:${ruleset}`;

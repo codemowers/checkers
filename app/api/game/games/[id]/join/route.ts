@@ -2,7 +2,6 @@ import { randomComputerName } from "../../../../../../lib/computer-names";
 import { computerEnabled } from "../../../../../../lib/features";
 import { identity } from "../../../../../../lib/identity";
 import { playComputerTurn } from "../../../../../../lib/computer";
-import { publishGame } from "../../../../../../lib/game-events";
 import { claimSeat } from "../../../../../../lib/matchmaking";
 import { toPublicGame } from "../../../../../../lib/public-game";
 import { GAME_KEY, LOBBY_KEY, PRESENCE_KEY, USERS_KEY, redis } from "../../../../../../lib/redis";
@@ -31,6 +30,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     updated.players[1] = options.opponent === "computer" ? { id: `computer:${game.id}`, name: randomComputerName() } : player;
     updated.computer = options.opponent === "computer";
     delete updated.waiting;
+    updated.joinedAt = Date.now();
     updated.revision++;
     updated.updatedAt = new Date().toISOString();
     updated = playComputerTurn(updated);
@@ -40,7 +40,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (saved === -1) return Response.json({ error: "Finish your current game before joining another table." }, { status: 409 });
     if (saved === 1) {
       await redis.zadd(PRESENCE_KEY, Date.now(), player.id);
-      await publishGame(updated);
       return Response.json(toPublicGame(updated, options.opponent === "computer" ? 0 : 1));
     }
   }

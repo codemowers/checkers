@@ -42,7 +42,7 @@ export async function collectSessions(redis = getRedis()) {
 }
 
 export function renderSessions(counts) {
-  return '# HELP checkers_open_game_sessions Occupied human player seats in unfinished games and connected spectator seats.\n'
+  return '# HELP checkers_open_game_sessions Open game-event connections on this Node.js pod, classified by role and authentication.\n'
     + '# TYPE checkers_open_game_sessions gauge\n'
     + ['player', 'spectator'].flatMap(role =>
       ['anonymous', 'authenticated'].map(auth =>

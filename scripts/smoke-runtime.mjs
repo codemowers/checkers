@@ -33,12 +33,12 @@ const created = await fetch(origin + '/api/game/match', {
 });
 assert.equal(created.status, 200);
 const { gameId } = await created.json();
-await counts(1, 0);
+await counts(0, 0);
 const joined = await fetch(`${origin}/api/game/games/${gameId}/join`, {
   method: 'POST', headers: guest, body: JSON.stringify({ opponent: 'human' }),
 });
 assert.equal(joined.status, 200);
-await counts(2, 0);
+await counts(0, 0);
 const connect = async () => {
   const abort = new AbortController();
   const response = await fetch(`${origin}/api/game/games/${gameId}/events`, { headers: viewer, signal: abort.signal });
@@ -50,11 +50,11 @@ const connect = async () => {
 };
 const first = await connect();
 const second = await connect();
-await counts(2, 1);
+await counts(0, 2);
 await first.reader.cancel();
 first.abort.abort();
 await setTimeout(100);
-await counts(2, 1);
+await counts(0, 2);
 await second.reader.cancel();
 second.abort.abort();
 // Stream cancellation propagates asynchronously to the HTTP server.

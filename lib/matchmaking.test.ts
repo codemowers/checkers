@@ -1,4 +1,6 @@
-import { RENAME_PLAYER } from "./rename-player";
+import { saveGame } from "./game-persistence";
+import { gameChannel, lobbyChannel } from "./game-events";
+import { END_GAME, RECONNECT_GRACE_MS } from "./game-store";
 import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -22,9 +24,15 @@ describe.skipIf(!url)("human-first lobby (Redis)", () => {
     const fresh = newGame(id, ruleset);
     const table = applyMove(fresh, 0, legalMoves(fresh)[0]);
     await redis.zadd(`${prefix}presence`, Date.now(), player);
-    return matchPlayer(redis, {
+    const result = await matchPlayer(redis, {
       users: used[0], waiting: used[1], game: (id) => `${prefix}game:${id}`, presence: used[3],
     }, { id: player, name: player }, table, mode);
+    if (result[0] === "offer") {
+      const offered = JSON.parse(result[1]) as Game;
+      expect(await claim(offered.id, player)).toBe(1);
+      return ["game", offered.id];
+    }
+    return result;
   }
   async function game(id: string) { return JSON.parse((await redis.get(`${prefix}game:${id}`))!) as Game; }
   it("keeps invitation tables out of automatic matchmaking and accepts a URL seat claim", async () => {
@@ -46,6 +54,7 @@ describe.skipIf(!url)("human-first lobby (Redis)", () => {
     table.players[1] = { id: computer ? `computer:${id}` : player, name: computer ? "Computer" : player };
     table.computer = computer;
     delete table.waiting;
+    table.joinedAt = Date.now();
     table.revision++;
     table = playComputerTurn(table);
     return claimSeat(redis, {
@@ -130,6 +139,16 @@ describe.skipIf(!url)("human-first lobby (Redis)", () => {
     expect(after.players[0]).toEqual(before.players[0]);
   });
 
+  it("starts a fresh opening after an existing computer game", async () => {
+    const previous = await match("solo", "english");
+    expect(await claim(previous[1], "solo", true)).toBe(1);
+
+    const next = await match("solo", "english");
+    expect(next[1]).not.toBe(previous[1]);
+    expect(await redis.hget(`${prefix}users`, "solo")).toBe(next[1]);
+    expect((await game(next[1])).waiting).toBe(true);
+  });
+
   it("does not assign someone already playing to a shared seat", async () => {
     const existing = await match("busy", "english");
     const invited = await match("host");
@@ -183,14 +202,14 @@ describe.skipIf(!url)("human-first lobby (Redis)", () => {
     const updated = JSON.parse(raw) as Game;
     updated.players[0].name = "New name";
     updated.revision++;
-    expect(await redis.eval(RENAME_PLAYER, 1, key, raw, JSON.stringify(updated))).toBe(1);
+    expect(await saveGame(redis, key, raw, updated, "preserve")).toBe(1);
     expect((await game(result[1])).players[0].name).toBe("New name");
     const afterTtl = await redis.pttl(key);
     if (joined) {
       expect(afterTtl).toBeGreaterThan(beforeTtl - 5000);
       expect(afterTtl).toBeLessThanOrEqual(beforeTtl);
     } else expect(afterTtl).toBe(-1);
-    expect(await redis.eval(RENAME_PLAYER, 1, key, raw, raw)).toBe(0);
+    expect(await saveGame(redis, key, raw, updated, "preserve")).toBe(0);
     expect((await game(result[1])).revision).toBe(updated.revision);
   });
 
@@ -201,8 +220,8 @@ describe.skipIf(!url)("human-first lobby (Redis)", () => {
     keys.add(newKey);
     const table = newGame(id, "international");
     // Empty queue snapshot is stale: another host has opened a table.
-    expect(await redis.eval(MATCH, 5, `${prefix}users`, `${prefix}waiting:international`,
-      newKey, `${prefix}presence`, newKey, JSON.stringify({ id: "guest", name: "Guest" }),
+    expect(await redis.eval(MATCH, 7, `${prefix}users`, `${prefix}waiting:international`,
+      newKey, `${prefix}presence`, newKey, gameChannel(id), lobbyChannel("international"), JSON.stringify({ id: "guest", name: "Guest" }),
       "guest", JSON.stringify(table), id, "open", "", Date.now(), new Date().toISOString(), "[]"))
       .toEqual(["retry", ""]);
     expect(await redis.get(newKey)).toBeNull();
@@ -211,11 +230,91 @@ describe.skipIf(!url)("human-first lobby (Redis)", () => {
     const busy = await match("busy", "english");
     const raw = (await redis.get(`${prefix}game:${host[1]}`))!;
     // Guest became busy after an empty assignment snapshot was read.
-    expect(await redis.eval(CLAIM_SEAT, 4, `${prefix}game:${host[1]}`, `${prefix}users`,
-      `${prefix}waiting:international`, `${prefix}game:${host[1]}`,
-      raw, raw, "busy", host[1], "")).toBe(0);
+    expect(await redis.eval(CLAIM_SEAT, 6, `${prefix}game:${host[1]}`, `${prefix}users`,
+      `${prefix}waiting:international`, `${prefix}game:${host[1]}`, gameChannel(host[1]), lobbyChannel("international"),
+      raw, raw, "busy", host[1], "", JSON.stringify({ type: "game", game: JSON.parse(raw) }))).toBe(0);
     expect(await redis.hget(`${prefix}users`, "busy")).toBe(busy[1]);
     expect(await redis.get(`${prefix}game:${host[1]}`)).toBe(raw);
+  });
+
+  it("gives an offline invitation host a fresh grace period without extending it on moves", async () => {
+    const result = await match("offline-host", "english", "invite");
+    await redis.zadd(`${prefix}presence`, Date.now() - 7 * 86400_000, "offline-host");
+    await claim(result[1], "guest");
+    let joined = await game(result[1]);
+    const started = joined.joinedAt!;
+    expect(started).toBeGreaterThan(Date.now() - 5000);
+    const expire = (cutoff: number) => redis.eval(END_GAME, 6, `${prefix}game:${joined.id}`, `${prefix}presence`,
+      `${prefix}users`, `${prefix}waiting:english`, gameChannel(joined.id), lobbyChannel(joined.ruleset), joined.revision,
+      JSON.stringify({ type: "ended", message: "Expired" }), "offline-host", cutoff);
+    expect(await expire(started + 15_000 - RECONNECT_GRACE_MS)).toBe(0);
+    const raw = JSON.stringify(joined);
+    joined = applyMove(joined, joined.turn, legalMoves(joined)[0]);
+    expect(joined.joinedAt).toBe(started);
+    expect(await saveGame(redis, `${prefix}game:${joined.id}`, raw, joined, "refresh")).toBe(1);
+    expect(await expire(started + 1)).toBe(1);
+    expect(await redis.get(`${prefix}game:${joined.id}`)).toBeNull();
+  });
+
+  it.each(["invite", "match"])("publishes committed %s joins and moves, but never rejected stale saves", async mode => {
+    const result = await match("host", "english");
+    const subscriber = redis.duplicate();
+    const events: Game[] = [];
+    subscriber.on("message", (_channel, raw) => events.push(JSON.parse(raw).game));
+    try {
+      await subscriber.subscribe(gameChannel(result[1]));
+      if (mode === "invite") expect(await claim(result[1], "guest")).toBe(1);
+      else expect(await match("guest", "english")).toEqual(result);
+      const joined = await game(result[1]);
+      const raw = (await redis.get(`${prefix}game:${joined.id}`))!;
+      const moved = applyMove(joined, joined.turn, legalMoves(joined)[0]);
+      expect(await saveGame(redis, `${prefix}game:${joined.id}`, raw, moved, "refresh")).toBe(1);
+      expect(await saveGame(redis, `${prefix}game:${joined.id}`, raw, moved, "refresh")).toBe(0);
+      // A command on the subscriber is a barrier for its earlier pub/sub messages.
+      await subscriber.ping();
+      expect(events.map(game => game.revision)).toEqual([joined.revision, moved.revision]);
+      expect(events[1].board).toEqual(moved.board);
+    } finally { subscriber.disconnect(); }
+  });
+
+  it("offers a waiting host without claiming it and allows inviting someone else", async () => {
+    const host = await match("host", "english");
+    const raw = (await redis.get(`${prefix}game:${host[1]}`))!;
+    const id = randomUUID();
+    const fresh = newGame(id, "english");
+    keys.add(`${prefix}game:${id}`);
+    const result = await matchPlayer(redis, {
+      users: `${prefix}users`, waiting: `${prefix}waiting:english`, presence: `${prefix}presence`,
+      game: (id) => `${prefix}game:${id}`,
+    }, { id: "new-guest", name: "Guest" }, applyMove(fresh, 0, legalMoves(fresh)[0]), "open", false);
+    expect(result[0]).toBe("offer");
+    expect(JSON.parse(result[1]).id).toBe(host[1]);
+    expect(await redis.get(`${prefix}game:${host[1]}`)).toBe(raw);
+    expect(await redis.hget(`${prefix}users`, "new-guest")).toBeNull();
+    expect(await redis.get(`${prefix}game:${id}`)).toBeNull();
+    const own = await match("new-guest", "english", "invite");
+    expect(own[1]).not.toBe(host[1]);
+    expect((await game(own[1])).matchmaking).toBe(false);
+    expect(await redis.zrange(`${prefix}waiting:english`, 0, -1)).toEqual([host[1]]);
+  });
+
+  it("lets only one of two offered players accept the seat", async () => {
+    const host = await match("host", "english");
+    const offer = async (player: string) => {
+      const id = randomUUID();
+      keys.add(`${prefix}game:${id}`);
+      const fresh = newGame(id, "english");
+      return matchPlayer(redis, {
+        users: `${prefix}users`, waiting: `${prefix}waiting:english`, presence: `${prefix}presence`,
+        game: (id) => `${prefix}game:${id}`,
+      }, { id: player, name: player }, applyMove(fresh, 0, legalMoves(fresh)[0]), "open", false);
+    };
+    const offers = await Promise.all([offer("guest-a"), offer("guest-b")]);
+    expect(offers.every(([status, raw]) => status === "offer" && JSON.parse(raw).id === host[1])).toBe(true);
+    expect((await game(host[1])).players[1].id).toBe("");
+    const claims = await Promise.all([claim(host[1], "guest-a"), claim(host[1], "guest-b")]);
+    expect(claims.sort()).toEqual([0, 1]);
+    expect(await redis.zcard(`${prefix}waiting:english`)).toBe(0);
   });
 
 });

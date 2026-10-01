@@ -3,7 +3,7 @@ import https from 'node:https';
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve, dirname, basename } from 'node:path';
-import { collectSessions } from './metrics.mjs';
+import { collectOpenConnections } from './open-connections.mjs';
 import { createInternalServer } from './internal-server.mjs';
 
 const require = createRequire(import.meta.url);
@@ -29,7 +29,7 @@ let certificate = certFile ? readCertificate() : undefined;
 const server = certificate ? https.createServer(certificate) : http.createServer();
 let ready = false;
 let draining = false;
-const metricsServer = createInternalServer({ isReady: () => ready && !draining, collectSessions });
+const metricsServer = createInternalServer({ isReady: () => ready && !draining, collectSessions: collectOpenConnections });
 metricsServer.listen(Number(process.env.METRICS_PORT ?? 3002), hostname);
 const { requestHandler: handleRequest, upgradeHandler: handleUpgrade } = await getRequestHandlers({ dir, port, hostname, server, isDev: false, experimentalHttpsServer: !!certificate });
 server.on('request', (request, response) => {

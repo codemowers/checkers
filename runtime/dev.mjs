@@ -1,12 +1,12 @@
 import http from 'node:http';
 import next from 'next';
 import { createInternalServer } from './internal-server.mjs';
-import { collectSessions } from './metrics.mjs';
+import { collectOpenConnections } from './open-connections.mjs';
 
 const hostname = process.env.HOSTNAME ?? '::';
 const port = Number(process.env.PORT ?? 3000);
 let ready = false;
-const internal = createInternalServer({ isReady: () => ready, collectSessions });
+const internal = createInternalServer({ isReady: () => ready, collectSessions: collectOpenConnections });
 internal.listen(Number(process.env.METRICS_PORT ?? 3002), hostname);
 const app = next({ dev: true, hostname, port });
 await app.prepare();

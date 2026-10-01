@@ -6,7 +6,6 @@ vi.mock("./redis", () => ({
   GAME_KEY: (id: string) => `game:${id}`, USERS_KEY: "users", PRESENCE_KEY: "presence", LOBBY_KEY: (rules: string) => `lobby:${rules}`,
 }));
 vi.mock("./matchmaking", () => ({ matchPlayer: vi.fn(async () => ["waiting", "table"]) }));
-vi.mock("./game-events", () => ({ publishGame: vi.fn() }));
 import { getServerSession } from "next-auth";
 import { POST } from "../app/api/game/match/route";
 import { matchPlayer } from "./matchmaking";
@@ -20,12 +19,13 @@ beforeEach(() => {
   vi.stubEnv("OIDC_CLIENT_ID", "checkers");
   vi.stubEnv("OIDC_CLIENT_SECRET", "test-secret");
   vi.stubEnv("ALLOW_SELF_PLAY", "false");
+  vi.stubEnv("ENABLE_MATCHMAKING", "false");
   vi.mocked(getServerSession).mockResolvedValue(null);
 });
 afterEach(() => vi.unstubAllEnvs());
-const request = () => new Request("https://checkers.example/api/game/match", {
+const request = (invite?: boolean) => new Request("https://checkers.example/api/game/match", {
   method: "POST", headers: { "content-type": "application/json", "x-player-instance": "12345678-1234-4234-8234-123456789abc", "x-player-name": "Guest" },
-  body: JSON.stringify({ ruleset: "english", opening: legalMoves(newGame("test", "english"))[0] }),
+  body: JSON.stringify({ invite, ruleset: "english", opening: legalMoves(newGame("test", "english"))[0] }),
 });
 it("rejects guest table creation before touching storage", async () => {
   expect((await POST(request())).status).toBe(401);
@@ -35,5 +35,30 @@ it("rejects guest table creation before touching storage", async () => {
 it("creates invitation-only tables under the signed-in host identity", async () => {
   vi.mocked(getServerSession).mockResolvedValue({ claims: { sub: "host", name: "Host" } });
   expect((await POST(request())).status).toBe(200);
-  expect(matchPlayer).toHaveBeenCalledWith(expect.anything(), expect.anything(), { id: "host", name: "Host" }, expect.objectContaining({ turn: 1 }), "invite");
+  expect(matchPlayer).toHaveBeenCalledWith(expect.anything(), expect.anything(), { id: "host", name: "Host" }, expect.objectContaining({ turn: 1 }), "invite", false);
+});
+
+it.each(["anon", "optional", "invite", "enforced"])("uses the global matchmaking flag in %s auth mode", async mode => {
+  vi.stubEnv("AUTH_MODE", mode);
+  vi.mocked(getServerSession).mockResolvedValue({ claims: { sub: "host", name: "Host" } });
+  vi.stubEnv("ENABLE_MATCHMAKING", "true");
+  expect((await POST(request())).status).toBe(200);
+  expect(vi.mocked(matchPlayer).mock.lastCall?.[4]).toBe("open");
+  expect((await POST(request(true))).status).toBe(200);
+  expect(vi.mocked(matchPlayer).mock.lastCall?.[4]).toBe("invite");
+  vi.stubEnv("ENABLE_MATCHMAKING", "false");
+  expect((await POST(request())).status).toBe(200);
+  expect(vi.mocked(matchPlayer).mock.lastCall?.[4]).toBe("invite");
+});
+it("returns an unclaimed public offer without leaking player credentials", async () => {
+  vi.stubEnv("ENABLE_MATCHMAKING", "true");
+  vi.mocked(getServerSession).mockResolvedValue({ claims: { sub: "guest", name: "Guest" } });
+  const table = newGame("offered");
+  table.waiting = true;
+  table.players[0] = { id: "anon:secret-credential", name: "Lauri Võsandi" };
+  vi.mocked(matchPlayer).mockResolvedValueOnce(["offer", JSON.stringify(table)]);
+  const response = await POST(request());
+  const data = await response.json();
+  expect(data).toMatchObject({ status: "offer", game: { id: "offered", waiting: true, you: null, players: [{ name: "Lauri Võsandi" }, {}] } });
+  expect(JSON.stringify(data)).not.toContain("secret-credential");
 });

@@ -1,18 +1,12 @@
 import { playComputerTurn } from "../../../../../../lib/computer";
 import { identity } from "../../../../../../lib/identity";
-import { publishGame } from "../../../../../../lib/game-events";
+import { saveGame } from "../../../../../../lib/game-persistence";
 import { toPublicGame } from "../../../../../../lib/public-game";
 import { GAME_KEY, PRESENCE_KEY, redis } from "../../../../../../lib/redis";
 import { applyMove, InvalidMove, playerIndex } from "../../../../../../lib/rules";
 import type { Game, Move } from "../../../../../../lib/types";
 
 export const dynamic = "force-dynamic";
-
-const COMPARE_AND_SET = `
-if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
-redis.call('SET', KEYS[1], ARGV[2], 'EX', 86400)
-return 1
-`;
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -37,9 +31,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       if (error instanceof InvalidMove) return Response.json({ error: error.message }, { status: 422 });
       throw error;
     }
-    const saved = await redis.eval(COMPARE_AND_SET, 1, key, raw, JSON.stringify(updated));
+    const saved = await saveGame(redis, key, raw, updated, "refresh");
     if (saved === 1) {
-      await publishGame(updated);
       return Response.json(toPublicGame(updated, index as 0 | 1));
     }
   }

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authMode } from "./auth-mode";
-import { computerEnabled, demoEnabled, spectatorMode } from "./features";
+import { computerEnabled, demoEnabled, matchmakingEnabled, spectatorMode } from "./features";
 
 beforeEach(() => {
-  for (const name of ["AUTH_MODE", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "ENABLE_COMPUTER", "ENABLE_DEMO", "SPECTATOR_MODE"]) vi.stubEnv(name, undefined);
+  for (const name of ["AUTH_MODE", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "ENABLE_COMPUTER", "ENABLE_DEMO", "ENABLE_MATCHMAKING", "SPECTATOR_MODE"]) vi.stubEnv(name, undefined);
 });
 afterEach(() => vi.unstubAllEnvs());
 const configureOidc = () => {
@@ -52,4 +52,17 @@ describe("runtime configuration", () => {
     vi.stubEnv("ENABLE_DEMO", "yes");
     expect(() => demoEnabled()).toThrow("ENABLE_DEMO");
   });
+});
+
+it("controls matchmaking independently of authentication mode", () => {
+  configureOidc();
+  for (const mode of ["anon", "optional", "invite", "enforced"]) {
+    vi.stubEnv("AUTH_MODE", mode);
+    vi.stubEnv("ENABLE_MATCHMAKING", undefined);
+    expect(matchmakingEnabled()).toBe(true);
+    vi.stubEnv("ENABLE_MATCHMAKING", "false");
+    expect(matchmakingEnabled()).toBe(false);
+  }
+  vi.stubEnv("ENABLE_MATCHMAKING", "yes");
+  expect(() => matchmakingEnabled()).toThrow("ENABLE_MATCHMAKING");
 });
