@@ -26,6 +26,16 @@ const counts = async (player, spectator) => {
   assert.match(metrics, /role="spectator",auth="authenticated"} 0\n/);
   assert.doesNotMatch(metrics, /Host|Guest|Viewer|duration_seconds/);
 };
+// Stream cancellation propagates asynchronously to the HTTP server.
+const waitForCounts = async (player, spectator) => {
+  for (let attempt = 0; ; attempt++) {
+    try { await counts(player, spectator); return; }
+    catch (error) {
+      if (!(error instanceof assert.AssertionError) || attempt >= 30) throw error;
+    }
+    await setTimeout(100);
+  }
+};
 await counts(0, 0);
 const created = await fetch(origin + '/api/game/match', {
   method: 'POST', headers: host,
@@ -53,17 +63,10 @@ const second = await connect();
 await counts(0, 2);
 await first.reader.cancel();
 first.abort.abort();
-await setTimeout(100);
-await counts(0, 2);
+await waitForCounts(0, 1);
 await second.reader.cancel();
 second.abort.abort();
-// Stream cancellation propagates asynchronously to the HTTP server.
-for (let attempt = 0; ; attempt++) {
-  const text = await (await fetch(internal + '/metrics')).text();
-  if (text.includes('role="spectator",auth="anonymous"} 0\n')) break;
-  assert.ok(attempt < 30, 'spectator lease was not removed on disconnect');
-  await setTimeout(100);
-}
+await waitForCounts(0, 0);
 const quit = await fetch(`${origin}/api/game/games/${gameId}`, { method: 'DELETE', headers: host });
 assert.equal(quit.status, 200);
 await counts(0, 0);

@@ -39,10 +39,13 @@ npm run build for production UI/build changes. Use a disposable Redis/Dragonfly
 instance for storage integration tests; see README.md for configuration.
 The complete Compose test workflow is:
   docker compose --profile test run --build --rm test
-It runs typechecking, runtime checks and game tests against Dragonfly. For
-production runtime or container changes, also use scripts/smoke-image.sh with
-the built image. Report skipped checks and distinguish build success from
-actual browser verification of visual changes.
+It runs typechecking, runtime checks and game tests against Dragonfly.
+Before committing, build the production image and run its HTTP and HTTPS
+smoke tests against the current checkout:
+  docker build -t checkers:smoke .
+  bash scripts/smoke-image.sh checkers:smoke
+Fix any smoke-test failures before committing. Report skipped checks and
+distinguish build success from actual browser verification of visual changes.
 
 Before working with a deployed cluster, follow the MCP setup guide at
 https://mcp.codemowers.io/ to connect the Codemowers service for general
