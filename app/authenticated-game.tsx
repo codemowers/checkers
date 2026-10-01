@@ -4,6 +4,7 @@ import { authOptions } from "../lib/auth";
 import { authMode } from "../lib/auth-mode";
 import { computerEnabled, demoEnabled, matchmakingEnabled, spectatorMode } from "../lib/features";
 import GameRoom from "./game-room";
+import { rulesConfig } from "../lib/rules-config";
 
 export default async function AuthenticatedGame({ gameId }: { gameId?: string }) {
   const mode = authMode();
@@ -15,6 +16,7 @@ export default async function AuthenticatedGame({ gameId }: { gameId?: string })
     redirect(`/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
   return <GameRoom
+    rulesConfig={rulesConfig()}
     initialGameId={gameId}
     allowSpectators={spectatorMode() === "invite"}
     playerName={anonymous ? undefined : claims?.name ?? session?.user?.name ?? "Player"}

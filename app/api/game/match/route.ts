@@ -7,6 +7,7 @@ import { matchmakingEnabled } from "../../../../lib/features";
 import { GAME_KEY, PRESENCE_KEY, USERS_KEY, LOBBY_KEY, redis } from "../../../../lib/redis";
 import { applyMove, InvalidMove, newGame } from "../../../../lib/rules";
 import { isRuleset } from "../../../../lib/rulesets";
+import { rulesetAllowed } from "../../../../lib/rules-config";
 import { toPublicGame } from "../../../../lib/public-game";
 import type { Game } from "../../../../lib/types";
 
@@ -19,6 +20,7 @@ export async function GET(request: Request) {
   if (!player) return Response.json({ error: "Authentication required" }, { status: 401, headers });
   const ruleset = new URL(request.url).searchParams.get("ruleset");
   if (!isRuleset(ruleset)) return Response.json({ error: "Choose a ruleset" }, { status: 400, headers });
+  if (!rulesetAllowed(ruleset)) return Response.json({ error: "This ruleset is disabled." }, { status: 403, headers });
   return lobbyEvents(request, redis, { waiting: LOBBY_KEY(ruleset), presence: PRESENCE_KEY, game: GAME_KEY }, player.id, ruleset);
 }
 
@@ -32,6 +34,7 @@ export async function POST(request: Request) {
   if (!options || !isRuleset(options.ruleset) || (options.invite !== undefined && typeof options.invite !== "boolean")) {
     return Response.json({ error: "Choose a ruleset" }, { status: 400 });
   }
+  if (!rulesetAllowed(options.ruleset)) return Response.json({ error: "This ruleset is disabled." }, { status: 403 });
   await redis.zadd(PRESENCE_KEY, Date.now(), player.id);
   await redis.zremrangebyscore(PRESENCE_KEY, 0, Date.now() - 86_400_000);
 

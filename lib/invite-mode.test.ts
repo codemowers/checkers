@@ -11,9 +11,11 @@ import { POST } from "../app/api/game/match/route";
 import { matchPlayer } from "./matchmaking";
 import { redis } from "./redis";
 import { legalMoves, newGame } from "./rules";
+import type { Ruleset } from "./rulesets";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv("RULES", undefined);
   vi.stubEnv("AUTH_MODE", "invite");
   vi.stubEnv("OIDC_ISSUER", "https://auth.example");
   vi.stubEnv("OIDC_CLIENT_ID", "checkers");
@@ -23,9 +25,24 @@ beforeEach(() => {
   vi.mocked(getServerSession).mockResolvedValue(null);
 });
 afterEach(() => vi.unstubAllEnvs());
-const request = (invite?: boolean) => new Request("https://checkers.example/api/game/match", {
+const request = (invite?: boolean, ruleset: Ruleset = "english") => new Request("https://checkers.example/api/game/match", {
   method: "POST", headers: { "content-type": "application/json", "x-player-instance": "12345678-1234-4234-8234-123456789abc", "x-player-name": "Guest" },
-  body: JSON.stringify({ invite, ruleset: "english", opening: legalMoves(newGame("test", "english"))[0] }),
+  body: JSON.stringify({ invite, ruleset, opening: legalMoves(newGame("test", ruleset))[0] }),
+});
+it.each(["english", "international", "english-default", "international-default"])("enforces %s when creating tables", async mode => {
+  vi.stubEnv("RULES", mode);
+  vi.mocked(getServerSession).mockResolvedValue({ claims: { sub: "host", name: "Host" } });
+  for (const ruleset of ["english", "international"] as const) {
+    vi.mocked(redis.zadd).mockClear();
+    vi.mocked(matchPlayer).mockClear();
+    const allowed = mode.endsWith("-default") || mode === ruleset;
+    expect((await POST(request(false, ruleset))).status).toBe(allowed ? 200 : 403);
+    if (allowed) expect(matchPlayer).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), expect.objectContaining({ ruleset }), "invite", false);
+    else {
+      expect(redis.zadd).not.toHaveBeenCalled();
+      expect(matchPlayer).not.toHaveBeenCalled();
+    }
+  }
 });
 it("rejects guest table creation before touching storage", async () => {
   expect((await POST(request())).status).toBe(401);

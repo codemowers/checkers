@@ -11,7 +11,9 @@ Open <http://localhost:3001>. Compose uses anonymous play and disposable Dragonf
 
 ## Playing and controls
 
-Choose English (8×8) or International (10×10) rules. With `ENABLE_MATCHMAKING=true`, the lobby immediately subscribes to waiting opponents using SSE—no opening move is needed to receive an offer. Openings, accepted seats, renames and departures are pushed through Redis notifications. Keepalive comments hold the connection open; the browser reconnects only if the stream closes.
+The lobby starts with English (8×8) rules by default. `RULES=english-default` or `international-default` selects the initial rules and allows switching before your opening move. `RULES=english` or `international` locks new games and lobby matchmaking to that ruleset and hides the switch. Demos use the lobby's selected rules; existing game links retain that game's rules.
+
+With `ENABLE_MATCHMAKING=true`, the lobby immediately subscribes to waiting opponents using SSE—no opening move is needed to receive an offer. Openings, accepted seats, renames and departures are pushed through Redis notifications. Keepalive comments hold the connection open; the browser reconnects only if the stream closes.
 
 If another player is waiting, the table begins a slow turn toward Black and asks **“Lauri Võsandi wants to play with you. Do you accept?”**, using that player's name. **Accept** claims Black and swiftly completes the 180° turn; the host's opening stays intact. The seat is not reserved until you accept. **Start a new game** turns back to a fresh Red opening and stops matchmaking offers for that private table. **Play against computer instead** also starts from your own opening when enabled. If nobody is waiting, you can play an opening to create a table as Red while the lobby listens for offers.
 
@@ -39,6 +41,7 @@ Read at startup; restart after changing configuration. Feature switches accept `
 | Variable | Default | Usage |
 | --- | --- | --- |
 | `AUTH_MODE` | Auto | `anon`: anonymous only; `optional`: anonymous or login; `enforced`: login required; `invite`: authenticated hosts, anonymous or authenticated invitees. Auto selects enforced with complete OIDC configuration, otherwise anon. |
+| `RULES` | `english-default` | `english` or `international`: fixed rules for new games. `english-default` or `international-default`: start with those rules and allow switching before starting a game. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Unset | All required for authentication modes other than anon. |
 | `NEXTAUTH_URL`, `NEXTAUTH_SECRET` | Unset | Public origin and shared session secret for login. |
 | `SPECTATOR_MODE` | `invite` | Invite links open as spectators; **Accept** takes the opponent seat. `disabled` joins immediately and disables spectating. |

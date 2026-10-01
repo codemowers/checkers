@@ -14,7 +14,10 @@ digraph MenuFlow {
     home [label="Open home page", shape=oval, fillcolor="#dcfce7", color="#15803d"];
     home_auth [label="Anonymous AND\nAUTH_MODE = invite or enforced?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     home_login [label="Sign in\nReturn to home after successful login"];
-    opening [label="Lobby: choose English / International\nNo opening move needed for offers"];
+    rules_choice [label="RULES mode?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
+    fixed_rules [label="Use configured rules\nHide rules switch; reject other rules in lobby API"];
+    selectable_rules [label="Start with configured default\nAllow switching before the opening move\nUnset: english-default"];
+    opening [label="Lobby: use selected rules\nNo opening move needed for offers"];
     invite_mode [label="ENABLE_MATCHMAKING=true?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     queue [label="Lobby SSE: waiting table\nwith the same ruleset?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     host [label="Play your own Red opening\nCreate a waiting table"];
@@ -23,8 +26,12 @@ digraph MenuFlow {
     to_play [label="Continue at 4 · Playing", shape=oval, fillcolor="#dcfce7", color="#15803d"];
     home -> home_auth;
     home_auth -> home_login [label="Yes · login required"];
-    home_auth -> opening [label="No · enter lobby"];
-    home_login -> opening [label="Login succeeds"];
+    home_auth -> rules_choice [label="No · enter lobby"];
+    home_login -> rules_choice [label="Login succeeds"];
+    rules_choice -> fixed_rules [label="english / international"];
+    rules_choice -> selectable_rules [label="english-default / international-default"];
+    fixed_rules -> opening;
+    selectable_rules -> opening;
     opening -> invite_mode;
     invite_mode -> host [label="No · private invitation"];
     invite_mode -> queue [label="Yes · look for waiting opponent"];
@@ -71,7 +78,7 @@ digraph MenuFlow {
 
   subgraph cluster_link {
     graph [label="3. Open a game link", color="#94a3b8", sortv=3];
-    link [label="Open /games/<id>", shape=oval, fillcolor="#dcfce7", color="#15803d"];
+    link [label="Open /games/<id>\nKeep that game's stored rules", shape=oval, fillcolor="#dcfce7", color="#15803d"];
     exists [label="Game still exists?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     missing [label="Game no longer available\nOffer Play again", shape=oval, fillcolor="#fee2e2", color="#b91c1c"];
     own_seat [label="Your identity already\nhas a seat?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
@@ -168,7 +175,7 @@ digraph MenuFlow {
     extras [label="Which action?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     demo_enabled [label="ENABLE_DEMO=true?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     no_demo [label="Watch demo button hidden", shape=oval, fillcolor="#fee2e2", color="#b91c1c"];
-    demo [label="Click Watch demo\nComputer vs computer"];
+    demo [label="Click Watch demo\nComputer vs computer\nUse selected lobby rules"];
     demo_action [label="Demo action?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     pause [label="Pause / Resume current demo"];
     another [label="Start another demo\nAfter result or error"];

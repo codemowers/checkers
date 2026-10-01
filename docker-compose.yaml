@@ -21,6 +21,7 @@ services:
       target: development
     environment:
       AUTH_MODE: anon
+      RULES: ${RULES:-english-default}
       ENABLE_COMPUTER: ${ENABLE_COMPUTER:-true}
       ENABLE_DEMO: ${ENABLE_DEMO:-true}
       ENABLE_MATCHMAKING: ${ENABLE_MATCHMAKING:-true}

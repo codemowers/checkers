@@ -7,6 +7,7 @@ import { fetchResponse, readJson, readChunk, NetworkError, RequestError } from "
 import { acceptSnapshot } from "../lib/game-snapshot";
 import { predictMove } from "../lib/board-playback";
 import type { Ruleset } from "../lib/rulesets";
+import type { RulesConfig } from "../lib/rules-config";
 import { toPublicGame } from "../lib/public-game";
 import { hasCapture, newGame } from "../lib/rules";
 import { PlayerAvatar, PlayerHeader } from "./player-header";
@@ -27,12 +28,12 @@ function localPlayerId() {
   return id;
 }
 
-export default function GameRoom({ initialGameId, playerName, playerAvatar, anonymous, allowSignIn, inviteOnly, enableMatchmaking, enableComputer, enableDemo, allowSpectators }: { initialGameId?: string; playerName?: string; playerAvatar?: string | null; anonymous: boolean; allowSignIn: boolean; inviteOnly: boolean; enableMatchmaking: boolean; enableComputer: boolean; enableDemo: boolean; allowSpectators: boolean }) {
+export default function GameRoom({ initialGameId, playerName, playerAvatar, anonymous, allowSignIn, inviteOnly, enableMatchmaking, enableComputer, enableDemo, allowSpectators, rulesConfig }: { rulesConfig: RulesConfig; initialGameId?: string; playerName?: string; playerAvatar?: string | null; anonymous: boolean; allowSignIn: boolean; inviteOnly: boolean; enableMatchmaking: boolean; enableComputer: boolean; enableDemo: boolean; allowSpectators: boolean }) {
   const [streamVersion, setStreamVersion] = useState(0);
   const [editingName, setEditingName] = useState(false);
   const [savingName, setSavingName] = useState(false);
   const [nameError, setNameError] = useState("");
-  const [ruleset, setRuleset] = useState<Ruleset>("english");
+  const [ruleset, setRuleset] = useState<Ruleset>(rulesConfig.defaultRuleset);
   const [matchBusy, setMatchBusy] = useState(false);
   const busy = useRef(false);
   const [demo, setDemo] = useState(false);
@@ -476,9 +477,9 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     {waitingForOpponent && <div className="status-card bottom-status">
       <p aria-live="polite">{matchError || (matchBusy ? "Taking your seat…" : openingChoice === "computer" ? "Make your opening move to play against the computer." : !enableMatchmaking || openingChoice === "invite" ? "Make your opening move, then share the game link to invite someone." : "Looking for a waiting opponent. Make an opening move to start your own game.")}</p>
       <div className="lobby-actions">
-        <button type="button" disabled={matchBusy} onClick={() => setRuleset(ruleset === "english" ? "international" : "english")}>
+        {rulesConfig.allowSelection && <button type="button" disabled={matchBusy} onClick={() => setRuleset(ruleset === "english" ? "international" : "english")}>
           Switch to {ruleset === "english" ? "international" : "English"} rules
-        </button>
+        </button>}
         {enableDemo && <button disabled={matchBusy} onClick={() => setDemo(true)}>Watch demo</button>}
       </div>
     </div>}

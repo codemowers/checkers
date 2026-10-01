@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authMode } from "./auth-mode";
+import { rulesConfig } from "./rules-config";
 import { computerEnabled, demoEnabled, matchmakingEnabled, spectatorMode } from "./features";
 
 beforeEach(() => {
+  vi.stubEnv("RULES", undefined);
   for (const name of ["AUTH_MODE", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "ENABLE_COMPUTER", "ENABLE_DEMO", "ENABLE_MATCHMAKING", "SPECTATOR_MODE"]) vi.stubEnv(name, undefined);
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -13,6 +15,20 @@ const configureOidc = () => {
 };
 
 describe("runtime configuration", () => {
+  it.each([
+    [undefined, "english", true],
+    ["english-default", "english", true],
+    ["international-default", "international", true],
+    ["english", "english", false],
+    ["international", "international", false],
+  ])("uses %s rules configuration", (value, defaultRuleset, allowSelection) => {
+    vi.stubEnv("RULES", value as string | undefined);
+    expect(rulesConfig()).toEqual({ defaultRuleset, allowSelection });
+  });
+  it("rejects an invalid rules configuration", () => {
+    vi.stubEnv("RULES", "other");
+    expect(() => rulesConfig()).toThrow("RULES");
+  });
   it("preserves automatic authentication defaults", () => {
     expect(authMode()).toBe("anon");
     configureOidc();

@@ -34,6 +34,7 @@ const hostGame = () => {
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubEnv("RULES", undefined);
   vi.useFakeTimers();
   abort = new AbortController();
   vi.stubEnv("ENABLE_MATCHMAKING", "true");
@@ -59,6 +60,19 @@ it("does not search when global matchmaking is disabled", async () => {
   vi.stubEnv("ENABLE_MATCHMAKING", "false");
   expect((await GET(request())).status).toBe(403);
   expect(redis.zrange).not.toHaveBeenCalled();
+});
+
+it.each(["english", "international"])("only offers %s in fixed rules mode", async ruleset => {
+  vi.stubEnv("RULES", ruleset);
+  const other = ruleset === "english" ? "international" : "english";
+  expect((await GET(request(other))).status).toBe(403);
+  expect(redis.zrange).not.toHaveBeenCalled();
+  expect((await GET(request(ruleset))).status).toBe(200);
+});
+
+it.each(["english-default", "international-default"])("allows the alternate rules in %s mode", async mode => {
+  vi.stubEnv("RULES", mode);
+  expect((await GET(request(mode === "english-default" ? "international" : "english"))).status).toBe(200);
 });
 
 it.each(["private", "own", "taken", "finished", "other-ruleset", "offline"])("does not offer %s games", async reason => {
