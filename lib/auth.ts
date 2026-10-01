@@ -1,7 +1,7 @@
 import type { NextAuthOptions } from "next-auth";
 import { createHash } from "node:crypto";
 
-const callbackUrl = `${process.env.NEXTAUTH_URL}/api/auth/callback/passmower`;
+const callbackUrl = `${process.env.NEXTAUTH_URL}/api/auth/callback/openid`;
 const gravatar = (email?: string | null) => email ? `https://www.gravatar.com/avatar/${createHash("md5").update(email.trim().toLowerCase()).digest("hex")}?d=identicon&s=160` : undefined;
 
 // The id_token was already verified by the OAuth flow; this only unpacks it.
@@ -19,7 +19,7 @@ export const authOptions: NextAuthOptions = {
     },
   },
   providers: [{
-    id: "passmower",
+    id: "openid",
     name: process.env.OIDC_IDP_DISPLAY_NAME || "OpenID",
     type: "oauth",
     wellKnown: `${(process.env.OIDC_ISSUER ?? "").replace(/\/?$/, "/")}.well-known/openid-configuration`,

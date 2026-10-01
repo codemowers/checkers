@@ -7,7 +7,7 @@ export default function SignIn({ providerName }: { providerName: string }) {
   useEffect(() => {
     const requested = new URLSearchParams(location.search).get("callbackUrl");
     const callbackUrl = requested?.startsWith("/") && !requested.startsWith("//") ? requested : "/";
-    void signIn("passmower", { callbackUrl });
+    void signIn("openid", { callbackUrl });
   }, []);
   return <main className="auth-redirect" aria-live="polite">
     <span className="brand-mark">◆</span>

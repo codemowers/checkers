@@ -8,7 +8,7 @@ build:
   local:
     push: true
   artifacts:
-    - image: zot.ee-lte-1.codemowers.io/laurivosandi/checkers
+    - image: checkers
       context: .
 deploy:
   kubeContext: admin@ee-lte-1.codemowers.io
@@ -18,7 +18,6 @@ deploy:
         chartPath: chart
         namespace: demo
         setValues:
-          imagePullSecret: zot-pull-secret
           env.AUTH_MODE: optional
         setValueTemplates:
-          image: "{{.IMAGE_FULLY_QUALIFIED_zot_ee_lte_1_codemowers_io_laurivosandi_checkers}}"
+          image: "{{.IMAGE_FULLY_QUALIFIED_checkers}}"

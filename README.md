@@ -1,6 +1,6 @@
 # Checkers
 
-WebGL checkers with English (8×8) and International (10×10) rules, computer play, shared games and spectators. Next.js serves the UI, API and Passmower login; Redis/Dragonfly stores games.
+WebGL checkers with English (8×8) and International (10×10) rules, computer play, shared games and spectators. Next.js serves the UI, API and OpenID login; Redis/Dragonfly stores games.
 
 ```sh
 docker compose up --build

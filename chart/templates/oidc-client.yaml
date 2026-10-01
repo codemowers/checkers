@@ -13,7 +13,7 @@ spec:
   tokenEndpointAuthMethod: client_secret_basic
   pkce: true
   redirectUris:
-    - https://{{ .Values.domain }}/api/auth/callback/passmower
+    - https://{{ .Values.domain }}/api/auth/callback/openid
   uri: https://{{ .Values.domain }}/
   availableScopes:
     - openid
