@@ -1,6 +1,8 @@
 apiVersion: dragonflydb.io/v1alpha1
 kind: Dragonfly
 metadata:
+  labels:
+    skaffold.dev/keep: "true"
   name: checkers-redis
 spec:
   image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.37.0

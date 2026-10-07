@@ -42,7 +42,7 @@ The complete Compose test workflow is:
 It runs typechecking, runtime checks and game tests against Dragonfly.
 Before committing, build the production image and run its HTTP and HTTPS
 smoke tests against the current checkout:
-  docker build -t checkers:smoke .
+  docker build --pull -t checkers:smoke .
   bash scripts/smoke-image.sh checkers:smoke
 Fix any smoke-test failures before committing. Report skipped checks and
 distinguish build success from actual browser verification of visual changes.

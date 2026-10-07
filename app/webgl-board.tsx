@@ -1,9 +1,9 @@
 "use client";
 
-import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, type ThreeEvent, type ThreeElements, useFrame, useThree } from "@react-three/fiber";
 import { Environment, Lightformer, OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useBoardPlayback } from "../lib/use-board-playback";
@@ -14,8 +14,25 @@ import { captureSources, legalTargets, owner, same } from "../lib/rules";
 import { CAPTURE_SCALE, capturedLayout } from "../lib/captured-layout";
 import { soleLegalMove, isMoveShortcut } from "../lib/move-shortcuts";
 import type { Move, Position, PublicGame } from "../lib/types";
+import { RenderPerformance, smokeCounts } from "../lib/render-performance";
 
-type Props = { game: PublicGame; player: number; onMove: (move: Move) => void; disabled: boolean; offering?: boolean; autoOrbit?: boolean; orbitPaused?: boolean };
+type Props = { game: PublicGame; player: number; viewPlayer?: number; onMove: (move: Move) => void; disabled: boolean; offering?: boolean; autoOrbit?: boolean; orbitPaused?: boolean };
+
+type Surface = THREE.MeshStandardMaterial | THREE.MeshLambertMaterial;
+const CheapMaterials = createContext(true);
+// Memory only: mode changes retain unlocked features; a tab refresh starts simple.
+let unlockedRenderLevel = 5;
+
+/** Keep textures and colours, but start with inexpensive vertex lighting. */
+function SurfaceMaterial({ physical, cheapColor, cheapEmissive, ref, ...props }: Omit<ThreeElements["meshPhysicalMaterial"], "ref"> & { physical?: boolean; cheapColor?: string; cheapEmissive?: string; ref?: React.Ref<Surface> }) {
+  const cheap = useContext(CheapMaterials);
+  if (cheap) return <meshLambertMaterial ref={ref as React.Ref<THREE.MeshLambertMaterial>}
+    color={cheapColor ?? props.color} map={props.map} emissive={cheapEmissive ?? props.emissive} emissiveIntensity={props.emissiveIntensity}
+    transparent={props.transparent} opacity={props.opacity} depthWrite={props.depthWrite} side={props.side} />;
+  return physical
+    ? <meshPhysicalMaterial ref={ref as React.Ref<THREE.MeshPhysicalMaterial>} {...props} />
+    : <meshStandardMaterial ref={ref as React.Ref<THREE.MeshStandardMaterial>} {...props} />;
+}
 
 /** The lamp hangs here; the beam, the bulb and the dust in it all key off this height. */
 const LAMP_HEIGHT = 5.9;
@@ -284,14 +301,24 @@ function TableControls({ autoOrbit = false, orbitPaused = false, seatAngle, calm
     camera.zoom = 1;
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld();
+    const fullscreen = !!document.fullscreenElement?.contains(gl.domElement);
+    // Fullscreen fits the eight-unit playing grid; the wooden rim may clip.
+    const halfWidth = fullscreen ? 4.03 : 8.2;
+    const halfDepth = fullscreen ? 4.03 : 5;
     let extent = 0;
-    for (const x of [-8.2, 8.2]) for (const y of [-0.4, 0.9]) for (const z of [-5, 5]) {
-      const corner = new THREE.Vector3(x, y, z).project(camera);
+    for (const x of [-halfWidth, halfWidth]) for (const y of [-0.4, 0.9]) for (const z of [-halfDepth, halfDepth]) {
+      const corner = new THREE.Vector3(x, y, z);
+      if (fullscreen) corner.applyAxisAngle(THREE.Object3D.DEFAULT_UP, seatAngle.current);
+      corner.project(camera);
       extent = Math.max(extent, Math.abs(corner.x), Math.abs(corner.y));
     }
-    camera.zoom = (0.9 / extent) * closeness.current;
+    camera.zoom = ((fullscreen ? 0.995 : 0.9) / extent) * closeness.current;
     camera.updateProjectionMatrix();
-  }, [camera]);
+  }, [camera, gl, seatAngle]);
+  useEffect(() => {
+    document.addEventListener("fullscreenchange", frameBoard);
+    return () => document.removeEventListener("fullscreenchange", frameBoard);
+  }, [frameBoard]);
   useLayoutEffect(frameBoard, [frameBoard, size.width, size.height]);
 
   // Dollying would be undone by the fit on the next frame, so the wheel scales
@@ -333,7 +360,7 @@ function useShaftMaterial() {
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
-    uniforms: { color: { value: new THREE.Color("#ffc98a") }, strength: { value: SHAFT_STRENGTH } },
+    uniforms: { color: { value: new THREE.Color("#ffc98a") }, strength: { value: 0 } },
     vertexShader: `
       varying vec2 grain;
       varying vec3 face;
@@ -407,7 +434,7 @@ function DustMotes({ calm }: { calm: boolean }) {
  * clock, swelling and fanning out as it goes, turning slowly and thinning to
  * nothing at the top, which is what separates smoke from a cloud of dust.
  */
-function Smoke({ calm }: { calm: boolean }) {
+function Smoke({ calm, count }: { calm: boolean; count: number }) {
   const column = useRef<THREE.Group>(null);
   const puffs = useMemo(() => Array.from({ length: 16 }, (_, i) => ({
     // The golden ratio spaces the puffs through the cycle without them pairing up.
@@ -435,7 +462,7 @@ function Smoke({ calm }: { calm: boolean }) {
       material.rotation = lane + time * spin;
     });
   });
-  return <group ref={column}>{puffs.map((_, index) => <sprite key={index}>
+  return <group ref={column}>{puffs.slice(0, count).map((_, index) => <sprite key={index}>
     <spriteMaterial map={smokeTexture()} color="#e8d6b4" transparent depthWrite={false} blending={THREE.AdditiveBlending} opacity={0.05} />
   </sprite>)}</group>;
 }
@@ -449,10 +476,13 @@ function Smoke({ calm }: { calm: boolean }) {
 function Pendant({ calm }: { calm: boolean }) {
   const fixture = useRef<THREE.Group>(null);
   const shaft = useShaftMaterial();
-  useFrame(({ camera, clock }) => {
+  const reveal = useRef(0);
+  useFrame(({ camera, clock }, delta) => {
     if (!fixture.current) return;
     const polar = Math.acos(THREE.MathUtils.clamp(camera.position.y / camera.position.length(), -1, 1));
-    const shown = THREE.MathUtils.smoothstep(polar, 0.12, 0.42);
+    const target = THREE.MathUtils.smoothstep(polar, 0.12, 0.42);
+    reveal.current = calm ? target : THREE.MathUtils.damp(reveal.current, target, 3, Math.min(delta, 0.1));
+    const shown = reveal.current;
     fixture.current.visible = shown > 0.01;
     fixture.current.traverse((node) => {
       const material = (node as THREE.Mesh).material as THREE.Material | undefined;
@@ -469,18 +499,18 @@ function Pendant({ calm }: { calm: boolean }) {
   });
   // Hung from the ceiling so the sway pivots up there, where the cord is knotted.
   const cord = CEILING - (LAMP_HEIGHT + SHADE_HEIGHT);
-  return <group ref={fixture} position={[0, CEILING, 0]}>
+  return <group ref={fixture} visible={false} position={[0, CEILING, 0]}>
     <mesh position={[0, -cord / 2, 0]}>
       <cylinderGeometry args={[0.035, 0.035, cord, 8]} />
-      <meshStandardMaterial color="#14100d" roughness={0.8} />
+      <SurfaceMaterial color="#14100d" roughness={0.8} />
     </mesh>
     <mesh position={[0, LAMP_HEIGHT + SHADE_HEIGHT / 2 - CEILING, 0]}>
       <cylinderGeometry args={[0.36, 1.18, SHADE_HEIGHT, 40, 1, true]} />
-      <meshStandardMaterial color="#7d4c22" roughness={0.31} metalness={0.85} envMapIntensity={1.3} emissive="#d9781f" emissiveIntensity={0.12} />
+      <SurfaceMaterial color="#7d4c22" roughness={0.31} metalness={0.85} envMapIntensity={1.3} emissive="#d9781f" emissiveIntensity={0.12} />
     </mesh>
     <mesh position={[0, LAMP_HEIGHT + SHADE_HEIGHT / 2 - CEILING, 0]}>
       <cylinderGeometry args={[0.355, 1.175, SHADE_HEIGHT, 40, 1, true]} />
-      <meshStandardMaterial color="#2a1a0e" side={THREE.BackSide} emissive="#ffb055" emissiveIntensity={0.72} roughness={0.8} />
+      <SurfaceMaterial color="#2a1a0e" side={THREE.BackSide} emissive="#ffb055" emissiveIntensity={0.72} roughness={0.8} />
     </mesh>
     <mesh position={[0, LAMP_HEIGHT - CEILING + 0.01, 0]} rotation={[Math.PI / 2, 0, 0]}>
       <torusGeometry args={[1.17, 0.035, 8, 44]} />
@@ -561,25 +591,25 @@ function Tumbler({ calm }: { calm: boolean }) {
   return <group position={[DRINK.x, DRINK.y, DRINK.z]}>
     <mesh position={[0, 0.02, 0]} receiveShadow>
       <cylinderGeometry args={[0.62, 0.62, 0.04, 32]} />
-      <meshStandardMaterial color="#2a201a" roughness={0.92} />
+      <SurfaceMaterial color="#2a201a" roughness={0.92} />
     </mesh>
     <mesh position={[0, 0.07, 0]} renderOrder={1} castShadow>
       <cylinderGeometry args={[0.37, 0.37, 0.1, 30]} />
-      <meshPhysicalMaterial {...glass} />
+      <SurfaceMaterial physical {...glass} />
     </mesh>
     {/* Golden and see-through: the clearcoat puts the lamp on the surface,
         which is the part that reads as liquid rather than resin. */}
     <mesh position={[0, 0.23, 0]} renderOrder={2}>
       <cylinderGeometry args={[0.39, 0.368, 0.24, 30]} />
-      <meshPhysicalMaterial color="#a8661a" emissive="#7a4205" emissiveIntensity={0.35} roughness={0.05} metalness={0} envMapIntensity={1.3} transparent opacity={0.72} depthWrite={false} clearcoat={0.7} clearcoatRoughness={0.1} />
+      <SurfaceMaterial physical color="#a8661a" emissive="#7a4205" emissiveIntensity={0.35} roughness={0.05} metalness={0} envMapIntensity={1.3} transparent opacity={0.72} depthWrite={false} clearcoat={0.7} clearcoatRoughness={0.1} />
     </mesh>
     <mesh position={[0, 0.41, 0]} renderOrder={3} castShadow>
       <cylinderGeometry args={[0.42, 0.372, 0.68, 30, 1, true]} />
-      <meshPhysicalMaterial {...glass} side={THREE.DoubleSide} />
+      <SurfaceMaterial physical {...glass} side={THREE.DoubleSide} />
     </mesh>
     <mesh position={[0, 0.75, 0]} rotation={[Math.PI / 2, 0, 0]}>
       <torusGeometry args={[0.415, 0.013, 6, 30]} />
-      <meshStandardMaterial color="#f0f7f4" roughness={0.1} metalness={0.3} />
+      <SurfaceMaterial color="#f0f7f4" roughness={0.1} metalness={0.3} />
     </mesh>
     {/*
       Frosted and opaque. Two see-through cubes inside a see-through glass left
@@ -590,13 +620,13 @@ function Tumbler({ calm }: { calm: boolean }) {
     */}
     <group ref={ice}>{ICE.map((cube, index) => <mesh key={index} position={cube.at} rotation={cube.turn} castShadow>
       <boxGeometry args={[cube.size, cube.size, cube.size]} />
-      <meshPhysicalMaterial color="#eaf6fa" roughness={0.08} metalness={0} envMapIntensity={1.9} clearcoat={1} clearcoatRoughness={0.04} emissive="#9fc4d6" emissiveIntensity={0.08} specularIntensity={1} />
+      <SurfaceMaterial physical color="#eaf6fa" roughness={0.08} metalness={0} envMapIntensity={1.9} clearcoat={1} clearcoatRoughness={0.04} emissive="#9fc4d6" emissiveIntensity={0.08} specularIntensity={1} />
     </mesh>)}</group>
   </group>;
 }
 
 /** The black player's espresso, gone cold two moves ago. */
-function Espresso({ calm }: { calm: boolean }) {
+function Espresso({ calm, smokeLevel }: { calm: boolean; smokeLevel: number }) {
   const china = { color: "#efe7dc", roughness: 0.22, metalness: 0.04, envMapIntensity: 0.5 } as const;
   const steam = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
@@ -614,27 +644,27 @@ function Espresso({ calm }: { calm: boolean }) {
   return <group position={[-DRINK.x, DRINK.y, -DRINK.z]}>
     <mesh position={[0, 0.02, 0]} receiveShadow>
       <cylinderGeometry args={[0.66, 0.6, 0.04, 32]} />
-      <meshStandardMaterial {...china} />
+      <SurfaceMaterial {...china} />
     </mesh>
     <mesh position={[0, 0.055, 0]}>
       <cylinderGeometry args={[0.33, 0.33, 0.03, 28]} />
-      <meshStandardMaterial {...china} />
+      <SurfaceMaterial {...china} />
     </mesh>
     <mesh position={[0, 0.23, 0]} castShadow>
       <cylinderGeometry args={[0.4, 0.33, 0.36, 28, 1, true]} />
-      <meshStandardMaterial {...china} side={THREE.DoubleSide} />
+      <SurfaceMaterial {...china} side={THREE.DoubleSide} />
     </mesh>
     {/* Glossy, so the lamp lands in the crema the way it does in the whiskey. */}
     <mesh position={[0, 0.175, 0]}>
       <cylinderGeometry args={[0.37, 0.335, 0.2, 28]} />
-      <meshStandardMaterial color="#3a2110" roughness={0.16} metalness={0.1} />
+      <SurfaceMaterial color="#3a2110" roughness={0.16} metalness={0.1} />
     </mesh>
     {/* A vertical half-loop joins the outer wall at both ends. */}
     <mesh position={[0.36, 0.23, 0]} rotation={[0, 0, -Math.PI / 2]} castShadow>
       <torusGeometry args={[0.15, 0.032, 10, 24, Math.PI]} />
-      <meshStandardMaterial {...china} />
+      <SurfaceMaterial {...china} />
     </mesh>
-    <group ref={steam}>{[0, 1, 2].map((wisp) => <sprite key={wisp}>
+    <group ref={steam}>{[0, 1, 2].slice(0, Math.max(0, 3 - smokeLevel)).map((wisp) => <sprite key={wisp}>
       <spriteMaterial map={smokeTexture()} color="#d8d2c4" transparent depthWrite={false} blending={THREE.AdditiveBlending} opacity={0.05} />
     </sprite>)}</group>
   </group>;
@@ -644,22 +674,51 @@ function Espresso({ calm }: { calm: boolean }) {
  * The disc itself. Shared by the pieces in play and the captured ones so
  * a captured piece cannot drift out of step with the board's.
  */
-function Draught({ side, king, collar }: { side: number; king?: boolean; collar?: React.Ref<THREE.MeshStandardMaterial> }) {
+function Draught({ side, king, collar, caster }: { side: number; king?: boolean; collar?: React.Ref<Surface>; caster?: React.Ref<THREE.Mesh> }) {
   return <group rotation={[king ? Math.PI : 0, 0, 0]}>
-    <mesh castShadow receiveShadow>
+    <mesh ref={caster} castShadow receiveShadow>
       <latheGeometry args={[PIECE_PROFILE, 48]} />
       {/* Clearcoat catches the lamp, which is what sells a bakelite draught piece under a bar light. */}
-      <meshPhysicalMaterial color={side === 0 ? "#ae392d" : "#202222"} roughness={0.42} metalness={0.06} envMapIntensity={0.45} clearcoat={0.25} clearcoatRoughness={0.5} specularIntensity={0.45} />
+      <SurfaceMaterial physical color={side === 0 ? "#ae392d" : "#202222"} roughness={0.42} metalness={0.06} envMapIntensity={0.45} clearcoat={0.25} clearcoatRoughness={0.5} specularIntensity={0.45} />
     </mesh>
     <mesh position={[0, 0.095, 0]} rotation={[-Math.PI / 2, 0, 0]}>
       <ringGeometry args={[0.24, 0.31, 40]} />
-      <meshStandardMaterial ref={collar} color={side === 0 ? "#d66a55" : "#4c504e"} emissive={side === 0 ? "#ff8b66" : "#9fb0a6"} emissiveIntensity={0} roughness={0.4} />
+      <SurfaceMaterial ref={collar} color={side === 0 ? "#d66a55" : "#4c504e"} emissive={side === 0 ? "#ff8b66" : "#9fb0a6"} emissiveIntensity={0} roughness={0.4} />
     </mesh>
     <mesh position={[0, -0.09, 0]} rotation={[Math.PI / 2, 0, 0]}>
       <ringGeometry args={[0.35, 0.38, 48]} />
-      <meshStandardMaterial color={side === 0 ? "#d66a55" : "#4c504e"} roughness={0.4} />
+      <SurfaceMaterial color={side === 0 ? "#d66a55" : "#4c504e"} roughness={0.4} />
     </mesh>
   </group>;
+}
+
+/** A cheap height-dependent penumbra, projected from the pendant onto the board. */
+function RaisedShadow({ body, caster, cell, ground = 0.049 }: { body: React.RefObject<THREE.Group | null>; caster: React.RefObject<THREE.Mesh | null>; cell: number; ground?: number }) {
+  const mesh = useRef<THREE.Mesh>(null);
+  const uniforms = useMemo(() => ({ feather: { value: 0.05 }, opacity: { value: 0 } }), []);
+  useFrame(() => {
+    if (!body.current || !mesh.current || !caster.current) return;
+    const { x, y, z } = body.current.position;
+    const surface = Math.abs(x) <= 4 && Math.abs(z) <= 4 ? ground : -0.351;
+    const lift = Math.max(0, y - surface - (PIECE_REST - ground));
+    const raised = lift > 0.015;
+    caster.current.castShadow = !raised;
+    mesh.current.visible = raised;
+    if (!raised) return;
+    const projection = (LAMP_HEIGHT - surface) / Math.max(0.5, LAMP_HEIGHT - y);
+    mesh.current.position.set(x * projection, surface, z * projection);
+    const radius = 0.42 * cell * body.current.scale.x * projection;
+    const blur = 0.015 + lift * 0.25;
+    mesh.current.scale.setScalar((radius + blur) * 2);
+    uniforms.feather.value = blur / (radius + blur);
+    uniforms.opacity.value = 0.42 / (1 + lift * 1.5);
+  });
+  return <mesh ref={mesh} visible={false} rotation={[-Math.PI / 2, 0, 0]} raycast={() => {}}>
+    <planeGeometry args={[1, 1]} />
+    <shaderMaterial transparent depthWrite={false} uniforms={uniforms}
+      vertexShader={`varying vec2 shadowUv; void main() { shadowUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`}
+      fragmentShader={`varying vec2 shadowUv; uniform float feather; uniform float opacity; void main() { float r = length(shadowUv - 0.5) * 2.0; float alpha = 1.0 - smoothstep(1.0 - feather * 2.0, 1.0, r); gl_FragColor = vec4(0.0, 0.0, 0.0, alpha * opacity); }`} />
+  </mesh>;
 }
 
 type Landing = { origin: [number, number, number]; promoted?: boolean };
@@ -671,8 +730,9 @@ function Piece({ cameraGesture, size, piece, position, selected, required, canSe
   const [drag, setDrag] = useState<THREE.Vector3>();
   const boardPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), -PIECE_REST), []);
   const body = useRef<THREE.Group>(null);
+  const caster = useRef<THREE.Mesh>(null);
   const flip = useRef<THREE.Group>(null);
-  const collar = useRef<THREE.MeshStandardMaterial>(null);
+  const collar = useRef<Surface>(null);
   const motion = useRef<{ from: THREE.Vector3; progress: number; promote?: boolean } | undefined>(undefined);
   const pendingDestination = useRef<THREE.Vector3 | undefined>(undefined);
   const cell = 8 / size;
@@ -738,16 +798,17 @@ function Piece({ cameraGesture, size, piece, position, selected, required, canSe
     motion.current = { from: new THREE.Vector3(...release), progress: 0 };
     setDrag(undefined);
   }
-  return <group ref={body} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={() => {
+  return <><group ref={body} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={() => {
     if (drag) motion.current = { from: drag.clone(), progress: 0 };
     setDrag(undefined);
   }}>
-    <group ref={flip} rotation={[piece >= 3 && !landing?.promoted ? Math.PI : 0, 0, 0]} scale={[cell, 1, cell]}><Draught side={owner(piece)} collar={collar} /></group>
-  </group>;
+    <group ref={flip} rotation={[piece >= 3 && !landing?.promoted ? Math.PI : 0, 0, 0]} scale={[cell, 1, cell]}><Draught side={owner(piece)} collar={collar} caster={caster} /></group>
+  </group><RaisedShadow body={body} caster={caster} cell={cell} /></>;
 }
 
 function FlyingCapture({ piece, from, to, cell, calm, spin }: { piece: number; from: [number, number, number]; to: [number, number, number]; cell: number; calm: boolean; spin: number }) {
   const ref = useRef<THREE.Group>(null);
+  const caster = useRef<THREE.Mesh>(null);
   const progress = useRef(0);
   useFrame((_, delta) => {
     if (!ref.current) return;
@@ -759,7 +820,7 @@ function FlyingCapture({ piece, from, to, cell, calm, spin }: { piece: number; f
     ref.current.rotation.y = spin * t;
     ref.current.rotation.x = piece >= 3 ? -Math.PI * t : 0;
   });
-  return <group ref={ref} position={from}><Draught side={owner(piece)} king={piece >= 3} /></group>;
+  return <><group ref={ref} position={from}><Draught side={owner(piece)} king={piece >= 3} caster={caster} /></group><RaisedShadow body={ref} caster={caster} cell={1} /></>;
 }
 
 /**
@@ -784,22 +845,22 @@ function TargetShadow({ at, calm, size }: { at: Position; calm: boolean; size: n
   </mesh>;
 }
 
-function Table({ game: target, player, onMove, disabled, offering = false, cameraGesture, wood, seatAngle }: Props & { cameraGesture: { current: boolean }; wood: THREE.Texture | null; seatAngle: { current: number } }) {
+function Table({ game: target, player, viewPlayer = player, onMove, disabled, offering = false, cameraGesture, wood, seatAngle, smokeLevel }: Props & { cameraGesture: { current: boolean }; wood: THREE.Texture | null; seatAngle: { current: number }; smokeLevel: number }) {
   const calmMotion = useCalm();
   const { frame, animating: playingMove } = useBoardPlayback(target, calmMotion);
   const table = useRef<THREE.Group>(null);
-  const initialAngle = useRef(offering ? 0 : player === 1 ? Math.PI : 0);
+  const initialAngle = useRef(offering ? 0 : viewPlayer === 1 ? Math.PI : 0);
   const [turning, setTurning] = useState(offering);
   const animating = playingMove || turning;
   useLayoutEffect(() => {
-    const destination = offering || player === 1 ? Math.PI : 0;
+    const destination = offering || viewPlayer === 1 ? Math.PI : 0;
     setTurning(!!table.current && table.current.rotation.y !== destination);
-  }, [offering, player]);
+  }, [offering, viewPlayer]);
   useFrame((_, delta) => {
     if (!table.current) return;
-    table.current.rotation.y = advanceTableAngle(table.current.rotation.y, player, offering, delta, calmMotion);
+    table.current.rotation.y = advanceTableAngle(table.current.rotation.y, viewPlayer, offering, delta, calmMotion);
     seatAngle.current = table.current.rotation.y;
-    if (turning && table.current.rotation.y === (offering || player === 1 ? Math.PI : 0)) setTurning(false);
+    if (turning && table.current.rotation.y === (offering || viewPlayer === 1 ? Math.PI : 0)) setTurning(false);
   });
   const game = frame.game;
   const { gl } = useThree();
@@ -877,10 +938,10 @@ function Table({ game: target, player, onMove, disabled, offering = false, camer
       <meshBasicMaterial map={contactTexture()} color="#000000" transparent opacity={0.62} depthWrite={false} />
     </mesh>
     <Tumbler calm={calmMotion} />
-    <Espresso calm={calmMotion} />
+    <Espresso calm={calmMotion} smokeLevel={smokeLevel} />
     <mesh position={[0, -0.18, 0]} receiveShadow castShadow>
       <boxGeometry args={[9.25, 0.35, 9.25]} />
-      <meshStandardMaterial map={wood} color="#93613c" roughness={0.5} envMapIntensity={0.12} />
+      <SurfaceMaterial map={wood} color="#93613c" cheapColor="#dbb98f" cheapEmissive="#302013" roughness={0.5} envMapIntensity={0.12} />
     </mesh>
     {legal.map((at) => <TargetShadow key={`${at.row}-${at.col}`} at={at} calm={calmMotion} size={size} />)}
     {[0, 1].flatMap((captor) => {
@@ -907,9 +968,9 @@ function Table({ game: target, player, onMove, disabled, offering = false, camer
       return <group key={`${game.id}:${r}-${c}`}>
         <mesh position={[(c - center) * cell, 0.015, (r - center) * cell]} receiveShadow onClick={(event) => { event.stopPropagation(); chooseSquare(position); }}>
           <boxGeometry args={[cell - 0.01, 0.06, cell - 0.01]} />
-          <meshStandardMaterial color={tone} roughness={0.62} envMapIntensity={0.12} map={dark ? wood : undefined} />
+          <SurfaceMaterial color={tone} cheapColor={dark ? "#b49a7c" : undefined} cheapEmissive={dark ? "#24180f" : undefined} roughness={0.62} envMapIntensity={0.12} map={dark ? wood : undefined} />
         </mesh>
-        {piece > 0 && <Piece cameraGesture={cameraGesture} size={size} piece={piece} position={position} selected={same(selected, position)} required={mustMoveThisPiece} canSelect={canSelect} flipped={player === 1} calm={calmMotion} landing={arriving && same(arriving.to, position) ? landing : undefined} onSelect={setSelected} onDrop={drop} />}
+        {piece > 0 && <Piece cameraGesture={cameraGesture} size={size} piece={piece} position={position} selected={same(selected, position)} required={mustMoveThisPiece} canSelect={canSelect} flipped={viewPlayer === 1} calm={calmMotion} landing={arriving && same(arriving.to, position) ? landing : undefined} onSelect={setSelected} onDrop={drop} />}
       </group>;
     }))}
   </group>;
@@ -935,38 +996,76 @@ function RoomReflections() {
  * The room the board sits in. Everything here is world-fixed rather than part
  * of the board group, so the lamp and felt stay put during seat transitions.
  */
-function BarRoom({ calm, theirs }: { calm: boolean; theirs: boolean }) {
-  const cloth = useRef<THREE.MeshPhysicalMaterial>(null);
+function BarRoom({ calm, theirs, smokeLevel, overhead }: { calm: boolean; theirs: boolean; smokeLevel: number; overhead: boolean }) {
+  const cloth = useRef<Surface>(null);
   const tint = useRef(0);
   useFrame((_, delta) => {
     if (!cloth.current) return;
     tint.current = THREE.MathUtils.damp(tint.current, theirs ? 1 : 0, 3.5, delta);
     cloth.current.color.lerpColors(CLOTH_GREEN, CLOTH_BLUE, tint.current);
-    cloth.current.sheenColor.lerpColors(SHEEN_GREEN, SHEEN_BLUE, tint.current);
+    if (cloth.current instanceof THREE.MeshPhysicalMaterial) cloth.current.sheenColor.lerpColors(SHEEN_GREEN, SHEEN_BLUE, tint.current);
   });
   return <>
     {/* Casino baize: matte, so the lamp and the neon land on it as coloured
         washes instead of highlights, with a cloth sheen at grazing angles. */}
     <mesh position={[0, -0.358, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
       <planeGeometry args={[FELT_SIZE, FELT_SIZE]} />
-      <meshPhysicalMaterial ref={cloth} map={feltTexture()} color="#17693b" roughness={0.95} metalness={0} envMapIntensity={0.06} sheen={0.6} sheenColor="#4f9c6a" sheenRoughness={0.75} />
+      <SurfaceMaterial physical ref={cloth} map={feltTexture()} color="#17693b" roughness={0.95} metalness={0} envMapIntensity={0.06} sheen={0.6} sheenColor="#4f9c6a" sheenRoughness={0.75} />
     </mesh>
-    <Pendant calm={calm} />
-    <DustMotes calm={calm} />
-    <Smoke calm={calm} />
+    {!overhead && <Pendant calm={calm} />}
+    {smokeLevel < 4 && <DustMotes calm={calm} />}
+    {!overhead && smokeCounts[smokeLevel] > 0 && <Smoke calm={calm} count={smokeCounts[smokeLevel]} />}
   </>;
 }
 
+function FrameMonitor({ onSample, overhead, onOverhead }: { onSample: (sample: { fps: number; level: number }) => void; overhead: boolean; onOverhead: (overhead: boolean) => void }) {
+  const monitor = useRef(new RenderPerformance(unlockedRenderLevel));
+  useEffect(() => {
+    const reset = () => monitor.current.resetSample();
+    document.addEventListener("visibilitychange", reset);
+    return () => document.removeEventListener("visibilitychange", reset);
+  }, []);
+  useFrame(({ camera }, delta) => {
+    const polar = Math.acos(THREE.MathUtils.clamp(camera.position.y / camera.position.length(), -1, 1));
+    // Separate enter/leave thresholds avoid toggling while a gesture settles.
+    const nextOverhead = overhead ? polar < 0.16 : polar <= 0.12;
+    if (nextOverhead !== overhead) {
+      onOverhead(nextOverhead);
+      monitor.current.resetSample();
+      return;
+    }
+    const sample = monitor.current.sample(delta, document.visibilityState === "visible");
+    if (sample) {
+      unlockedRenderLevel = sample.level;
+      onSample(sample);
+    }
+  });
+  return null;
+}
+
+function FadingBloom({ calm }: { calm: boolean }) {
+  const bloom = useRef<React.ComponentRef<typeof Bloom>>(null);
+  const intensity = useRef(0);
+  useFrame((_, delta) => {
+    intensity.current = calm ? 0.55 : THREE.MathUtils.damp(intensity.current, 0.55, 3, Math.min(delta, 0.1));
+    if (bloom.current) bloom.current.intensity = intensity.current;
+  });
+  return <Bloom ref={bloom} mipmapBlur intensity={0} luminanceThreshold={0.86} luminanceSmoothing={0.22} radius={0.55} />;
+}
+
 export default function WebGLBoard(props: Props) {
+  const [performance, setPerformance] = useState({ fps: 0, level: unlockedRenderLevel });
+  const topDown = useTopDownStart();
+  const [overhead, setOverhead] = useState(topDown && !props.autoOrbit);
   const calm = useCalm();
   const wood = useWoodGrain();
-  const seatAngle = useRef(props.offering ? 0 : props.player === 1 ? Math.PI : 0);
+  const seatAngle = useRef(props.offering ? 0 : (props.viewPlayer ?? props.player) === 1 ? Math.PI : 0);
   const touches = useRef(new Set<number>());
   const cameraGesture = useRef(false);
   const releaseTouch = (event: React.PointerEvent) => { touches.current.delete(event.pointerId); };
   const turn = props.game.you === null || props.game.status !== "playing" ? "idle" : props.game.turn === props.player ? "yours" : "theirs";
   if (wood === undefined) return <div className="board-loading" role="status">Setting the table…</div>;
-  return <div className="board-canvas" onContextMenu={(event) => event.preventDefault()}
+  return <div className="board-canvas" data-effects-level={performance.level} data-overhead={overhead} onContextMenu={(event) => event.preventDefault()}
     onPointerDownCapture={(event) => {
       if (!touches.current.size) cameraGesture.current = false;
       if (event.pointerType !== "touch") return;
@@ -976,26 +1075,30 @@ export default function WebGLBoard(props: Props) {
       if (touches.current.size >= 2) cameraGesture.current = true;
     }}
     onPointerUpCapture={releaseTouch} onPointerCancelCapture={releaseTouch}>
-    <Canvas shadows="soft" dpr={[1, 1.75]} gl={{ antialias: true, alpha: true }} onCreated={({ gl }) => { gl.toneMapping = THREE.ACESFilmicToneMapping; gl.toneMappingExposure = 1.04; }}>
+    <Canvas shadows="percentage" dpr={performance.level >= 5 ? 1 : [1, 1.75]} gl={{ antialias: true, alpha: true }} onCreated={({ gl }) => { gl.toneMapping = THREE.ACESFilmicToneMapping; gl.toneMappingExposure = 1.04; }}>
+      <CheapMaterials.Provider value={performance.level >= 5}>
+      <FrameMonitor onSample={setPerformance} overhead={overhead} onOverhead={setOverhead} />
       <fog attach="fog" args={["#07100a", 22, 46]} />
       <CameraRig autoOrbit={props.autoOrbit} />
       {/* Broad warm lamplight, with soft room fill and green bounce from the felt. */}
-      {/* Filtered shadow maps stay stable as the demo camera circles the table. */}
-      <RoomReflections />
+      {/* Shadow maps handle resting pieces; raised pieces use soft projected shadows. */}
+      {performance.level < 5 && <RoomReflections />}
       <ambientLight intensity={0.4} color="#a5afbb" />
       <hemisphereLight args={["#b9c8d6", "#35513b", 0.55]} />
       <directionalLight position={[-5, 6, 7]} intensity={0.2} color="#9db4c6" />
       <spotLight castShadow position={[0, LAMP_HEIGHT, 0]} angle={LAMP_BEAM_ANGLE} penumbra={0.9} intensity={104} distance={22} decay={2} color="#ffc98a" shadow-mapSize={[2048, 2048]} shadow-camera-near={1} shadow-camera-far={16} shadow-bias={-0.00005} shadow-normalBias={0.003} />
       <pointLight position={[2.6, 1.1, 5.2]} intensity={7} distance={13} decay={2} color="#ffb673" />
       <NeonWash calm={calm} />
-      <BarRoom calm={calm} theirs={turn === "theirs"} />
-      <Table {...props} cameraGesture={cameraGesture} wood={wood} seatAngle={seatAngle} />
+      <BarRoom calm={calm} theirs={turn === "theirs"} smokeLevel={performance.level} overhead={overhead} />
+      <Table {...props} cameraGesture={cameraGesture} wood={wood} seatAngle={seatAngle} smokeLevel={overhead ? 3 : performance.level} />
       <TableControls autoOrbit={props.autoOrbit} orbitPaused={props.orbitPaused} seatAngle={seatAngle} calm={calm} />
       {/* The bulb, its rim and the sparks in the beam are the only things over
           threshold, so the glow lands where a camera would blow out. */}
-      <EffectComposer multisampling={4}>
-        <Bloom mipmapBlur intensity={0.55} luminanceThreshold={0.86} luminanceSmoothing={0.22} radius={0.55} />
-      </EffectComposer>
+      {performance.level < 4 && <EffectComposer multisampling={4}>
+        <FadingBloom calm={calm} />
+      </EffectComposer>}
+      </CheapMaterials.Provider>
     </Canvas>
+    <output className="render-fps" aria-label="Rendering frames per second">{performance.fps ? `${Math.round(performance.fps)} FPS` : "Measuring FPS…"}</output>
   </div>;
 }

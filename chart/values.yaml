@@ -1,7 +1,13 @@
 domain: checkers
-# Defaults to the public ghcr.io/codemowers/checkers:latest published by CI,
-# which needs no pull secret. Skaffold overrides both for its own registry.
-# image: ghcr.io/codemowers/checkers:v1.0.0
+# Registry/namespace prefix for short image names. Full image paths override it.
+imageRegistry: ghcr.io/codemowers
+image: checkers:latest
+
+# Cluster-specific ingress, DNS and OIDC selectors; enabled by Skaffold.
+networkPolicy:
+  enabled: false
+
+# Optional credentials for private images. Public packages need none.
 # imagePullSecret: zot-pull-secret
 
 env:

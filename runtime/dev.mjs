@@ -8,7 +8,7 @@ const port = Number(process.env.PORT ?? 3000);
 let ready = false;
 const internal = createInternalServer({ isReady: () => ready, collectSessions: collectOpenConnections });
 internal.listen(Number(process.env.METRICS_PORT ?? 3002), hostname);
-const app = next({ dev: true, hostname, port });
+const app = next({ dev: true, webpack: true, hostname, port });
 await app.prepare();
 const server = http.createServer(app.getRequestHandler());
 server.on('upgrade', app.getUpgradeHandler());

@@ -6,7 +6,7 @@ import { newGame } from "../lib/rules";
 import { type Ruleset } from "../lib/rulesets";
 import { toPublicGame } from "../lib/public-game";
 import { COMPUTER_PAIRS, computerPair } from "../lib/computer-names";
-import { PlayerHeader } from "./player-header";
+import { GameHeader } from "./game-header";
 import type { Game } from "../lib/types";
 
 const Board = dynamic(() => import("./webgl-board"), { ssr: false });
@@ -19,7 +19,7 @@ function newDemoGame(id: string, ruleset: Ruleset, pairIndex: number): Game {
   return game;
 }
 
-export default function Demo({ ruleset, onExit }: { ruleset: Ruleset; onExit: () => void }) {
+export default function Demo({ ruleset, onExit, signInUrl }: { ruleset: Ruleset; onExit: () => void; signInUrl?: string }) {
   const [firstPair] = useState(() => Math.floor(Math.random() * COMPUTER_PAIRS.length));
   const [game, setGame] = useState(() => newDemoGame("demo", ruleset, firstPair));
   const current = useRef(game);
@@ -69,19 +69,18 @@ export default function Demo({ ruleset, onExit }: { ruleset: Ruleset; onExit: ()
     : paused ? "Demo paused." : `${game.players[game.turn].name} (${game.turn === 0 ? "Red" : "Black"}) is thinking…`);
 
   return <main>
-    <header>
-      <span className="brand">CHECKERS</span>
-      <PlayerHeader game={toPublicGame(game, null)} />
-      <div className="nav-actions"><button className="quit" onClick={onExit}>Back to play</button></div>
-    </header>
+    <GameHeader game={toPublicGame(game, null)} signInUrl={signInUrl} />
     <section className="game-shell"><div className="table-wrap">
       <Board game={toPublicGame(game, null)} player={0} onMove={ignoreMove} disabled autoOrbit orbitPaused={paused} />
     </div></section>
     <div className="status-card bottom-status">
       <p aria-live="polite">{status}</p>
+      <div className="lobby-actions">
       {finished || error
         ? <button onClick={restart}>Watch another game</button>
         : <button onClick={() => setPaused((value) => !value)}>{paused ? "Resume demo" : "Pause demo"}</button>}
+      <button onClick={onExit}>Back to play</button>
+      </div>
     </div>
   </main>;
 }

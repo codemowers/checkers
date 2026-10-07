@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authMode } from "./auth-mode";
 import { rulesConfig } from "./rules-config";
-import { computerEnabled, demoEnabled, matchmakingEnabled, spectatorMode } from "./features";
+import { computerEnabled, demoEnabled, matchmakingEnabled, localPlayEnabled, spectatorMode } from "./features";
 
 beforeEach(() => {
   vi.stubEnv("RULES", undefined);
-  for (const name of ["AUTH_MODE", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "ENABLE_COMPUTER", "ENABLE_DEMO", "ENABLE_MATCHMAKING", "SPECTATOR_MODE"]) vi.stubEnv(name, undefined);
+  for (const name of ["AUTH_MODE", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "ENABLE_COMPUTER", "ENABLE_DEMO", "ENABLE_MATCHMAKING", "ENABLE_LOCAL_PLAY", "SPECTATOR_MODE"]) vi.stubEnv(name, undefined);
 });
 afterEach(() => vi.unstubAllEnvs());
 const configureOidc = () => {
@@ -15,6 +15,15 @@ const configureOidc = () => {
 };
 
 describe("runtime configuration", () => {
+  it("requires an explicit local play flag and validates it", () => {
+    expect(localPlayEnabled()).toBe(false);
+    vi.stubEnv("ENABLE_LOCAL_PLAY", "true");
+    expect(localPlayEnabled()).toBe(true);
+    vi.stubEnv("ENABLE_LOCAL_PLAY", "false");
+    expect(localPlayEnabled()).toBe(false);
+    vi.stubEnv("ENABLE_LOCAL_PLAY", "yes");
+    expect(() => localPlayEnabled()).toThrow("ENABLE_LOCAL_PLAY");
+  });
   it.each([
     [undefined, "english", true],
     ["english-default", "english", true],

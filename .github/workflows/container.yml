@@ -80,6 +80,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          pull: true
           load: true
           tags: checkers:ci
           labels: ${{ steps.meta.outputs.labels }}
@@ -92,7 +93,7 @@ jobs:
       - name: Scan image
         run: >-
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
-          aquasec/trivy:0.65.0 image --exit-code 1 --ignore-unfixed
+          aquasec/trivy:0.75.0 image --exit-code 1 --ignore-unfixed
           --severity HIGH,CRITICAL checkers:ci
 
       - name: Publish verified image
@@ -140,10 +141,10 @@ jobs:
           version="${VERSION#v}"
           mkdir -p "$RUNNER_TEMP/chart" "$RUNNER_TEMP/package"
           cp -R chart/. "$RUNNER_TEMP/chart/"
-          sed -i "s|^# image:.*|image: ghcr.io/${OWNER}/checkers:${version}|" "$RUNNER_TEMP/chart/values.yaml"
+          sed -i "s|^imageRegistry:.*|imageRegistry: ghcr.io/${OWNER}|" "$RUNNER_TEMP/chart/values.yaml"
           image="ghcr.io/${OWNER}/checkers:${version}"
           digest="$(docker buildx imagetools inspect "$image" | awk '/Digest:/ { print $2; exit }')"
           test -n "$digest"
-          sed -i "s|^image:.*|image: ghcr.io/${OWNER}/checkers@${digest}|" "$RUNNER_TEMP/chart/values.yaml"
+          sed -i "s|^image:.*|image: checkers@${digest}|" "$RUNNER_TEMP/chart/values.yaml"
           helm package "$RUNNER_TEMP/chart" --destination "$RUNNER_TEMP/package" --version "$version" --app-version "$VERSION"
           helm push "$RUNNER_TEMP/package/checkers-$version.tgz" "oci://ghcr.io/${OWNER}/charts"

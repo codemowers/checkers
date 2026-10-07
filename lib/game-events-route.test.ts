@@ -178,7 +178,7 @@ it("removes an authenticated spectator lease when the viewer takes a player seat
 
 it("removes a spectator lease even when the socket closes during registration", async () => {
   vi.mocked(identity).mockResolvedValue({ id: "anon:viewer", name: "Viewer" });
-  vi.mocked(redis.zadd).mockImplementationOnce(async () => { abort.abort(); return "1"; });
+  vi.mocked(redis.zadd).mockImplementationOnce(async () => { abort.abort(); return 1; });
   const response = await GET(new Request("https://checkers.example/api/game/games/invited/events", { signal: abort.signal }), { params: Promise.resolve({ id: waiting.id }) });
   expect((await response.body!.getReader().read()).done).toBe(true);
   await Promise.resolve();

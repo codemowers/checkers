@@ -24,6 +24,7 @@ services:
       RULES: ${RULES:-english-default}
       ENABLE_COMPUTER: ${ENABLE_COMPUTER:-true}
       ENABLE_DEMO: ${ENABLE_DEMO:-true}
+      ENABLE_LOCAL_PLAY: ${ENABLE_LOCAL_PLAY:-true}
       ENABLE_MATCHMAKING: ${ENABLE_MATCHMAKING:-true}
       SPECTATOR_MODE: ${SPECTATOR_MODE:-invite}
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
@@ -33,7 +34,7 @@ services:
       - ./app:/app/app:ro
       - ./lib:/app/lib:ro
       - ./runtime:/app/runtime:ro
-      - ./middleware.ts:/app/middleware.ts:ro
+      - ./proxy.ts:/app/proxy.ts:ro
       - ./next.config.js:/app/next.config.js:ro
     tmpfs:
       - /app/.next:uid=${LOCAL_UID:-1000},gid=${LOCAL_GID:-1000},mode=0755

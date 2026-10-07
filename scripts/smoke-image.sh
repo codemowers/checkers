@@ -19,7 +19,7 @@ for mode in http https; do
   if [ "$mode" = https ]; then
     tls=(-v "$work:/tls:ro" -e TLS_CERT_FILE=/tls/tls.crt -e TLS_KEY_FILE=/tls/tls.key -e NODE_EXTRA_CA_CERTS=/tls/tls.crt)
   fi
-  docker run -d --name "$name" --network "$name" --read-only --user 1001:1001 --tmpfs /tmp -e AUTH_MODE=anon "${tls[@]}" "$image" >/dev/null
+  docker run -d --name "$name" --network "$name" --read-only --user 1001:1001 --tmpfs /tmp -e AUTH_MODE=anon -e ENABLE_LOCAL_PLAY=true "${tls[@]}" "$image" >/dev/null
   ready=false
   for attempt in $(seq 1 30); do
     if docker exec "$name" node -e "fetch('http://127.0.0.1:3002/ready').then(r => process.exit(r.ok ? 0 : 1))" >/dev/null 2>&1; then ready=true; break; fi

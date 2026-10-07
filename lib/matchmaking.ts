@@ -5,7 +5,7 @@ import type { Ruleset } from "./rulesets";
 
 /** Lobby discovery never creates a table, claims a seat or refreshes presence. */
 export async function findWaitingGame(redis: Redis, keys: Pick<LobbyKeys, "waiting" | "presence" | "game">, playerId: string, ruleset: Ruleset): Promise<Game | undefined> {
-  const candidates = await redis.zrange(keys.waiting, 0, 99);
+  const candidates = await redis.zrange(keys.waiting, "0", "99");
   if (!candidates.length) return;
   const records = await redis.mget(...candidates.map(keys.game));
   for (const raw of records) {
@@ -83,7 +83,7 @@ export async function matchPlayer(redis: Redis, keys: LobbyKeys, player: Player,
     const assigned = await redis.hget(keys.users, player.id);
     if (!resumeCurrent && assigned) await redis.zrem(keys.waiting, assigned);
     const [current, queued] = await Promise.all([
-      redis.hget(keys.users, player.id), mode === "invite" ? Promise.resolve([] as string[]) : redis.zrange(keys.waiting, 0, 99),
+      redis.hget(keys.users, player.id), mode === "invite" ? Promise.resolve([] as string[]) : redis.zrange(keys.waiting, "0", "99"),
     ]);
     // A fresh opening must not match the player's own waiting table.
     const candidates = resumeCurrent ? queued : queued.filter(id => id !== current);

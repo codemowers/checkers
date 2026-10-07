@@ -1,0 +1,88 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: checkers-web
+spec:
+  podSelector:
+    matchLabels:
+      app: checkers-web
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: traefik-traefik
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 3001
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 3002
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app: checkers-redis
+              app.kubernetes.io/name: dragonfly
+              app.kubernetes.io/part-of: dragonfly
+      ports:
+        - protocol: TCP
+          port: 6379
+    # OIDC discovery and token requests use Passmower's HTTPS issuer via Traefik.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: traefik-traefik
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 30443
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+        - ipBlock:
+            cidr: ::/0
+            except:
+              - ::1/128
+              - fc00::/7
+              - fe80::/10
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}

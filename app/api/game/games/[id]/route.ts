@@ -1,4 +1,4 @@
-import { spectatorMode } from "../../../../../lib/features";
+import { localPlayEnabled, spectatorMode } from "../../../../../lib/features";
 import { saveGame } from "../../../../../lib/game-persistence";
 import { identity } from "../../../../../lib/identity";
 import { endGame } from "../../../../../lib/game-store";
@@ -27,6 +27,10 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   if (!raw) return Response.json({ ok: true });
   const game = JSON.parse(raw) as Game;
   if (playerIndex(game, player.id) < 0) return Response.json({ error: "Forbidden" }, { status: 403 });
+  const query = new URL(request.url).searchParams;
+  if (query.get("local") === "true" && (!localPlayEnabled() || !game.waiting || playerIndex(game, player.id) !== 0 || Number(query.get("revision")) !== game.revision)) {
+    return Response.json({ error: "This table cannot switch to local play." }, { status: 409 });
+  }
   const ended = await endGame(game, `${player.name} left the game.`);
   if (ended === 0) return Response.json({ error: "The game changed. Please try again." }, { status: 409 });
   return Response.json({ ok: true });

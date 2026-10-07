@@ -9,8 +9,12 @@ import { predictMove } from "../lib/board-playback";
 import type { Ruleset } from "../lib/rulesets";
 import type { RulesConfig } from "../lib/rules-config";
 import { toPublicGame } from "../lib/public-game";
-import { hasCapture, newGame } from "../lib/rules";
-import { PlayerAvatar, PlayerHeader } from "./player-header";
+import { InvalidMove, hasCapture, newGame } from "../lib/rules";
+import { useSignInVisibility } from "./sign-in-button";
+import { GameHeader } from "./game-header";
+import { useServerConnection } from "../lib/use-server-connection";
+import { useLocalOpening } from "../lib/use-local-opening";
+import { localPlayCommitted } from "../lib/local-game";
 import type { GameEvent, Move, PublicGame } from "../lib/types";
 
 const Board = dynamic(() => import("./webgl-board"), { ssr: false, loading: () => <div className="board-loading">Setting the table…</div> });
@@ -28,8 +32,11 @@ function localPlayerId() {
   return id;
 }
 
-export default function GameRoom({ initialGameId, playerName, playerAvatar, anonymous, allowSignIn, inviteOnly, enableMatchmaking, enableComputer, enableDemo, allowSpectators, rulesConfig }: { rulesConfig: RulesConfig; initialGameId?: string; playerName?: string; playerAvatar?: string | null; anonymous: boolean; allowSignIn: boolean; inviteOnly: boolean; enableMatchmaking: boolean; enableComputer: boolean; enableDemo: boolean; allowSpectators: boolean }) {
+export default function GameRoom({ initialGameId, playerName, playerAvatar, anonymous, allowSignIn, enableMatchmaking, enableComputer, enableDemo, enableLocalPlay, allowSpectators, rulesConfig, localShell = false }: { rulesConfig: RulesConfig; initialGameId?: string; playerName?: string; playerAvatar?: string | null; anonymous: boolean; allowSignIn: boolean; enableMatchmaking: boolean; enableComputer: boolean; enableDemo: boolean; enableLocalPlay: boolean; allowSpectators: boolean; localShell?: boolean }) {
+  const serverConnected = useServerConnection();
+  const showSignIn = useSignInVisibility(allowSignIn, localShell);
   const [streamVersion, setStreamVersion] = useState(0);
+  const [reconnecting, setReconnecting] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [savingName, setSavingName] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -42,7 +49,11 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
   const [gameId, setGameId] = useState<string | undefined>(initialGameId);
   const [game, setGame] = useState<PublicGame>();
   const [offer, setOffer] = useState<PublicGame>();
-  const [openingChoice, setOpeningChoice] = useState<"find" | "invite" | "computer">("find");
+  const defaultOpeningChoice = localShell ? "local" : enableMatchmaking ? "find" : enableLocalPlay ? "local" : "invite";
+  const [openingChoice, setOpeningChoice] = useState<"find" | "invite" | "computer" | "local">(defaultOpeningChoice);
+  const opening = useLocalOpening(enableLocalPlay, rulesConfig.defaultRuleset);
+  const localStarted = !gameId && !!opening.game && opening.game.revision > 1;
+  const localPlaying = !gameId && !!opening.game && localPlayCommitted(opening.game);
   const activeGameId = useRef(gameId);
   const receiveGame = useCallback((incoming: PublicGame) => {
     if (incoming.id !== activeGameId.current) return;
@@ -72,11 +83,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     return toPublicGame(table, 0);
   }, [displayName, ruleset]);
 
-  useEffect(() => {
-    const choice = sessionStorage.getItem("checkers-opening-choice");
-    sessionStorage.removeItem("checkers-opening-choice");
-    if (!initialGameId && (choice === "invite" || choice === "computer")) setOpeningChoice(choice);
-  }, [initialGameId]);
+  useEffect(() => { if (opening.game) setRuleset(opening.game.ruleset); }, [opening.game?.ruleset]);
 
   useEffect(() => {
     if (!anonymous) return;
@@ -101,7 +108,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
   }, [anonymous, displayName]);
 
   useEffect(() => {
-    if (!enableMatchmaking || !lobby || gameId || openingChoice !== "find" || demo || matchBusy || (anonymous && !anonymousName)) return;
+    if (localPlaying || !serverConnected || !enableMatchmaking || !lobby || gameId || openingChoice !== "find" || demo || matchBusy || (anonymous && !anonymousName)) return;
     const aborter = new AbortController();
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -137,7 +144,9 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     };
     void connect();
     return () => { stopped = true; aborter.abort(); if (timer) clearTimeout(timer); };
-  }, [enableMatchmaking, lobby, gameId, openingChoice, demo, matchBusy, anonymous, anonymousName, ruleset, headers]);
+  }, [localPlaying, serverConnected, enableMatchmaking, lobby, gameId, openingChoice, demo, matchBusy, anonymous, anonymousName, ruleset, headers]);
+
+  useEffect(() => { if (!serverConnected) setOffer(undefined); }, [serverConnected]);
 
   useEffect(() => { setMatchError(""); }, [offer?.id]);
 
@@ -158,17 +167,17 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     return result;
   };
 
-  const openTable = async (opening: Move, choice = openingChoice) => {
-    if (busy.current) return;
+  const openTable = async (openingMove: Move, choice: "find" | "invite" | "computer") => {
+    if (!serverConnected || busy.current) return;
     busy.current = true;
     setMatchBusy(true);
     setMatchError("");
-    setOptimistic(predictMove(preview, opening));
+    setOptimistic(predictMove(preview, openingMove));
     try {
       const response = await fetchResponse("/api/game/match", {
-        method: "POST", headers: headers(true), body: JSON.stringify({ ruleset, opening, invite: choice !== "find" }),
+        method: "POST", headers: headers(true), body: JSON.stringify({ ruleset, opening: openingMove, invite: choice !== "find" }),
       });
-      if (response.status === 401) { location.href = "/signin"; return; }
+      if (response.status === 401) { location.href = "/signin?callbackUrl=%2F"; return; }
       const result = await readJson(response);
       if (!response.ok) throw new RequestError(result.error ?? "Could not open a table.");
       if (result.status === "offer") {
@@ -178,6 +187,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
       }
       setOffer(undefined);
       adoptGame(result.gameId);
+      if (choice === "invite") await share(result.gameId);
       if (choice === "computer") {
         const joined = await requestSeat(result.gameId, "computer");
         if (joined) receiveGame(joined);
@@ -190,7 +200,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
 
   const joinTable = async (opponent: "human" | "computer") => {
     const id = offer?.id ?? gameId;
-    if (!id || busy.current) return;
+    if (!serverConnected || !id || busy.current) return;
     busy.current = true;
     setMatchBusy(true);
     setMatchError("");
@@ -206,8 +216,9 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     } finally { busy.current = false; setMatchBusy(false); }
   };
 
-  const share = async () => {
-    const url = `${location.origin}/games/${gameId}`;
+  const share = async (id = gameId) => {
+    if (!serverConnected || !id) return;
+    const url = `${location.origin}/games/${id}`;
     if (!navigator.clipboard) {
       setShareMessage({ text: "Clipboard unavailable. Copy the game link from your address bar." });
       return;
@@ -217,7 +228,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
       setShareMessage({ text: "Link copied", copied: true });
     } catch (error) {
       if (!(error instanceof DOMException) || !["AbortError", "NotAllowedError", "InvalidStateError", "DataError"].includes(error.name)) throw error;
-      if (error.name !== "AbortError") setShareMessage({ text: "Could not copy the link. Please try again." });
+      if (error.name !== "AbortError") setShareMessage({ text: "Could not copy the link. Try Invite again or copy the game link from your address bar." });
     }
   };
 
@@ -227,7 +238,9 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     let stopped = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     const end = (text: string) => {
+      if (activeGameId.current !== gameId || aborter.signal.aborted) return;
       stopped = true;
+      setReconnecting(false);
       activeGameId.current = undefined;
       setGame(undefined);
       setGameId(undefined);
@@ -274,6 +287,9 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
               const event = JSON.parse(data) as GameEvent;
               if (event.type === "ended") { end(event.message); aborter.abort(); return; }
               receiveGame(event.game);
+              // A reconnect often returns the same revision. Recovery must not
+              // depend on acceptSnapshot replacing the confirmed board.
+              setReconnecting(false);
             }
             boundary = buffer.indexOf("\n\n");
           }
@@ -282,9 +298,11 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
         if (error instanceof DOMException && error.name === "AbortError") return;
         if (!(error instanceof NetworkError || error instanceof RequestError)) throw error;
         if (aborter.signal.aborted || stopped) return;
-        setMessage("Reconnecting to the table…");
       }
-      if (!stopped && !aborter.signal.aborted) retry = setTimeout(connect, 1500);
+      if (!stopped && !aborter.signal.aborted) {
+        setReconnecting(true);
+        retry = setTimeout(connect, 1500);
+      }
     }
     void connect();
     return () => {
@@ -325,6 +343,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
 
   useEffect(() => {
     if (!game) return;
+    if (reconnecting) { setMessage("Reconnecting to the table…"); return; }
     const you = game.you;
     if (you === null) {
       setMessage(game.status === "finished"
@@ -341,7 +360,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     else if (game.turn === you && hasCapture(game, you)) setMessage("A capture is required. Use a ringed piece.");
     else if (game.turn === you && !hasMoved) setMessage("Your turn — drag a piece, or tap it then choose a highlighted square.");
     else setMessage(game.turn === you ? "Your move." : `${game.players[game.turn].name} is thinking…`);
-  }, [game, hasMoved]);
+  }, [game, hasMoved, reconnecting]);
 
   useEffect(() => { setHasMoved(false); }, [game?.id]);
 
@@ -370,31 +389,54 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     } finally { setSavingName(false); }
   };
 
-  const participate = (choice: "find" | "invite" | "computer" = "find") => {
-    if (inviteOnly && anonymous) {
-      sessionStorage.setItem("checkers-opening-choice", choice);
-      location.href = "/signin?callbackUrl=%2F";
+  const participate = (choice: "find" | "invite" | "computer" | "local" = defaultOpeningChoice, fresh = false) => {
+    if (!fresh && !gameId && opening.openingMove && choice !== "local") {
+      setOpeningChoice(choice);
+      setOffer(undefined);
+      void openTable(opening.openingMove, choice);
       return;
     }
-    history.replaceState(null, "", "/");
+    if ((fresh || gameId) && enableLocalPlay) opening.reset(ruleset);
+    history.replaceState(null, "", localShell ? "/local" : "/");
     activeGameId.current = undefined;
-    setGame(undefined);
-    setOffer(undefined);
-    setOpeningChoice(choice);
-    setOptimistic(undefined);
-    setGameId(undefined);
-    setShareMessage(undefined);
-    setMatchError("");
-    setMessage("Taking a seat at the next open table…");
-    setLobby(true);
+    setGame(undefined); setOffer(undefined); setGameId(undefined);
+    setOpeningChoice(choice); setOptimistic(undefined);
+    setShareMessage(undefined); setMatchError(""); setLobby(true);
   };
 
-  const quit = async () => {
+  const localMove = (proposed: Move) => {
+    try {
+      const next = opening.play(proposed);
+      setOffer(undefined); setMatchError("");
+      if (next?.revision === 2 && openingChoice !== "local") void openTable(proposed, openingChoice);
+    }
+    catch (error) { if (!(error instanceof InvalidMove)) throw error; setMatchError(error.message); }
+  };
+
+  const detachForLocal = async () => {
+    if (!game?.waiting || game.you !== 0 || busy.current) return false;
+    busy.current = true; setMatchBusy(true);
+    try {
+      const response = await fetchResponse(`/api/game/games/${game.id}?local=true&revision=${game.revision}`, { method: "DELETE", headers: headers() });
+      if (!response.ok) throw new RequestError("The table changed. Check the board before switching to local play.");
+      opening.adopt(game);
+      activeGameId.current = undefined; setGameId(undefined); setGame(undefined);
+      setLobby(true); setOpeningChoice("local");
+      history.replaceState(null, "", localShell ? "/local" : "/");
+      return true;
+    } catch (error) {
+      if (!(error instanceof NetworkError || error instanceof RequestError)) throw error;
+      setMatchError(error.message); return false;
+    } finally { busy.current = false; setMatchBusy(false); }
+  };
+
+  const quit = async (choice: "find" | "invite" | "local" = defaultOpeningChoice) => {
+    if (localStarted) { participate(choice, true); return; }
     if (!game) return;
     try {
       const response = await fetchResponse(`/api/game/games/${game.id}`, { method: "DELETE", headers: headers(), keepalive: true });
       if (!response.ok) throw new RequestError("Could not leave the game. Try again.");
-      participate();
+      participate(choice, true);
     } catch (error) {
       if (!(error instanceof NetworkError || error instanceof RequestError)) throw error;
       setMatchError(error instanceof Error ? error.message : "Could not leave the game. Try again.");
@@ -402,16 +444,25 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
   };
 
   const inviteSomeoneElse = (choice: "invite" | "computer") => {
-    participate(choice);
+    participate(choice, true);
   };
 
-  const displayed = optimistic ?? game ?? offer ?? (lobby && !gameId ? preview : undefined);
+  const waitingLocalMove = async (proposed: Move) => {
+    if (await detachForLocal()) localMove(proposed);
+  };
+
+  const localBoard = !gameId && !offer && enableLocalPlay && opening.game ? toPublicGame(opening.game, opening.game.turn) : undefined;
+  const waitingLocal = enableLocalPlay && !!game?.waiting && game.you === 0;
+  const displayed = optimistic ?? game ?? offer ?? localBoard ?? (lobby && !gameId ? preview : undefined);
+  const scoreGame = localBoard ?? game ?? offer ?? displayed;
+  const localSide = localBoard?.turn === 1 ? "Groovy Gorilla (Black)" : "Lunar Lobster (Red)";
+  const localMessage = localBoard?.status === "finished" ? localBoard.winner == null ? "Draw." : `${localBoard.winner === 0 ? "Lunar Lobster" : "Groovy Gorilla"} wins.` : localPlaying ? `${localSide} to move${localBoard?.forced ? " — keep jumping" : localBoard && hasCapture(localBoard, localBoard.turn) ? " — capture required" : ""}.` : localBoard?.turn === 1 ? "Move Black to play locally." : "Make your opening move.";
   const turnClass = game?.you != null && game.status === "playing" ? (game.turn === game.you ? "your-turn" : "opponent-turn") : "";
-  const waitingForOpponent = lobby && !gameId && !offer;
+  const waitingForOpponent = lobby && !gameId && !offer && !localPlaying;
 
   const signInUrl = `/signin?callbackUrl=${encodeURIComponent(gameId ? `/games/${gameId}` : "/")}`;
 
-  const invitationActions = <div className="lobby-actions">
+  const invitationActions = serverConnected && <div className="lobby-actions">
     <button disabled={matchBusy} onClick={() => void joinTable("human")}>{matchBusy ? "Joining…" : "Accept"}</button>
     <button disabled={matchBusy} onClick={() => inviteSomeoneElse("invite")}>{offer ? "Start a new game" : "Invite someone else"}</button>
     {enableComputer && <button disabled={matchBusy} onClick={() => inviteSomeoneElse("computer")}>Play against computer instead</button>}
@@ -419,7 +470,6 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
 
   const identityActions = <>
     {anonymous && anonymousName && <button type="button" onClick={() => { setDraftName(anonymousName); setNameError(""); setEditingName(true); }}>Change name</button>}
-    {allowSignIn && <button type="button" onClick={() => { location.href = signInUrl; }}>Log in</button>}
   </>;
   const nameEditor = anonymous && editingName && <div className="name-overlay" role="dialog" aria-modal="true" aria-labelledby="change-name-title">
     <form className="name-prompt" onSubmit={chooseName}>
@@ -434,25 +484,20 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     </form>
   </div>;
 
-  if (enableDemo && demo) return <Demo ruleset={ruleset} onExit={() => setDemo(false)} />;
+  const quitAction = (localStarted || (game?.you != null && game.status === "playing")) && <button onClick={() => void quit()}>Quit game</button>;
+
+  if (enableDemo && demo) return <Demo ruleset={ruleset} signInUrl={showSignIn ? signInUrl : undefined} onExit={() => setDemo(false)} />;
 
   return <main className={turnClass}>
-    <header>
-      <a className="brand" href="https://github.com/codemowers/checkers" target="_blank" rel="noreferrer" draggable={false} aria-label="Checkers by Codemowers on GitHub"><span className="brand-mark">◆</span><span>CHECKERS <small>BY CODEMOWERS</small></span></a>
-      {game && (!game.waiting || game.you === null)
-        ? <PlayerHeader game={game} playerAvatar={playerAvatar} />
-        : <div className="identity"><PlayerAvatar src={playerAvatar} name={anonymous ? anonymousName || draftName : undefined} />{displayName || "Anonymous player"}</div>}
-      <div className="nav-actions">
-        {!watching && (!gameId || game?.you != null) && identityActions}
-        {game?.you != null && !game.waiting && allowSpectators && <button aria-live="polite" onClick={() => void share()}>{shareMessage?.copied ? "Link copied" : "Share game"}</button>}
-        {game?.you != null && game.status === "playing" && <button className="quit" onClick={quit}>Quit game</button>}
-      </div>
-    </header>
+    <GameHeader game={scoreGame} local={!!localBoard} playerAvatar={playerAvatar} signInUrl={showSignIn ? signInUrl : undefined}>
+      {!localBoard && !watching && (!gameId || game?.you != null) && identityActions}
+      {serverConnected && game?.you != null && !game.waiting && allowSpectators && <button aria-live="polite" onClick={() => void share()}>{shareMessage?.copied ? "Link copied" : "Share game"}</button>}
+    </GameHeader>
 
     <section className="game-shell">
       <div className="table-wrap">
         {displayed
-          ? <Board game={displayed} player={displayed.you ?? 1} offering={!!offer} autoOrbit={!offer && displayed.you === null} onMove={waitingForOpponent ? openTable : move} disabled={displayed.you === null || moving || !!displayed.waiting || matchBusy || !!optimistic || (anonymous && !anonymousName)} />
+          ? <Board game={displayed} player={localBoard || waitingLocal ? displayed.turn : displayed.you ?? 1} viewPlayer={localBoard || waitingLocal ? 0 : undefined} offering={!!offer} autoOrbit={!offer && displayed.you === null} onMove={localBoard ? localMove : waitingLocal ? waitingLocalMove : waitingForOpponent ? proposed => void openTable(proposed, openingChoice === "local" ? "find" : openingChoice) : move} disabled={localBoard ? matchBusy || displayed.status === "finished" : !serverConnected || displayed.you === null || moving || (!!displayed.waiting && !waitingLocal) || matchBusy || !!optimistic || (anonymous && !anonymousName)} />
             : gameId
               ? <WaitingTable />
               : <EndedTable message={message} onRestart={() => participate()} />}
@@ -460,30 +505,39 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     </section>
 
     {game && <div className="status-card bottom-status">
-      <p aria-live="polite">{matchError || (!shareMessage?.copied && shareMessage?.text) || message}</p>
+      <p aria-live="polite">{matchError || (!shareMessage?.copied && shareMessage?.text) || (waitingLocal ? "Waiting for an opponent." : message)}</p>
+      <div className="lobby-actions">
       {game.waiting && game.you === null && invitationActions}
-      {game.waiting && game.you === 0 && <div className="lobby-actions">
+      {serverConnected && game.waiting && game.you === 0 && <>
         <button aria-live="polite" onClick={() => void share()}>{shareMessage?.copied ? "Link copied" : "Invite"}</button>
+        {enableMatchmaking && game.matchmaking && <button disabled={matchBusy} onClick={() => void quit("invite")}>Start new game</button>}
         {enableComputer && <button disabled={matchBusy} onClick={() => void joinTable("computer")}>{matchBusy ? "Joining…" : "Play against computer instead"}</button>}
-      </div>}
+      </>}
       {game.status === "finished" && !watching && <button onClick={() => participate()}>Play again</button>}
+      {quitAction}
+      </div>
     </div>}
 
     {offer && <div className="status-card bottom-status">
       <p aria-live="polite">{matchError || `${offer.players[0].name} wants to play with you. Do you accept?`}</p>
-      {invitationActions}
+      <div className="lobby-actions">{invitationActions}{quitAction}</div>
     </div>}
 
     {waitingForOpponent && <div className="status-card bottom-status">
-      <p aria-live="polite">{matchError || (matchBusy ? "Taking your seat…" : openingChoice === "computer" ? "Make your opening move to play against the computer." : !enableMatchmaking || openingChoice === "invite" ? "Make your opening move, then share the game link to invite someone." : "Looking for a waiting opponent. Make an opening move to start your own game.")}</p>
+      <p aria-live="polite">{matchError || (localBoard ? localMessage : matchBusy ? "Taking your seat…" : openingChoice === "computer" ? "Make your opening move to play against the computer." : !enableMatchmaking || openingChoice === "invite" ? "Make your opening move, then share the game link to invite someone." : "Looking for a waiting opponent. Make an opening move to start your own game.")}</p>
       <div className="lobby-actions">
-        {rulesConfig.allowSelection && <button type="button" disabled={matchBusy} onClick={() => setRuleset(ruleset === "english" ? "international" : "english")}>
+        {rulesConfig.allowSelection && (!localBoard || localBoard.revision === 1) && <button type="button" disabled={matchBusy} onClick={() => { const next = ruleset === "english" ? "international" : "english"; setRuleset(next); if (enableLocalPlay) opening.reset(next); }}>
           Switch to {ruleset === "english" ? "international" : "English"} rules
         </button>}
-        {enableDemo && <button disabled={matchBusy} onClick={() => setDemo(true)}>Watch demo</button>}
+        {enableDemo && !localStarted && !hasMoved && <button disabled={matchBusy} onClick={() => setDemo(true)}>Watch demo</button>}
+        {serverConnected && (enableLocalPlay || openingChoice !== "invite") && <button disabled={matchBusy} onClick={() => participate("invite")}>Invite someone</button>}
+        {serverConnected && enableMatchmaking && <button disabled={matchBusy} onClick={() => openingChoice === "find" ? participate("invite", true) : participate("find")}>{openingChoice === "find" ? "Start new game" : "Find opponent"}</button>}
+        {serverConnected && enableComputer && localBoard?.turn === 1 && <button disabled={matchBusy} onClick={() => participate("computer")}>Play against computer</button>}
+        {quitAction}
       </div>
     </div>}
 
+    {localPlaying && <div className="status-card bottom-status"><p aria-live="polite">{matchError || localMessage}</p><div className="lobby-actions">{quitAction}{localBoard?.status === "finished" && <button onClick={() => { opening.reset(ruleset); participate("local"); }}>Play again</button>}</div></div>}
     {!watching && nameEditor}
 
   </main>;

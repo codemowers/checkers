@@ -10,6 +10,28 @@ for (const path of ['/metrics', '/api/health', '/health', '/ready']) {
 }
 assert.equal((await fetch(internal + '/health')).status, 200);
 
+const local = await fetch(origin + '/local');
+assert.equal(local.status, 200);
+const localHtml = await local.text();
+assert.match(localHtml, /CHECKERS/);
+assert.match(localHtml, /localShell/);
+const worker = await fetch(origin + '/local-sw.js');
+assert.equal(worker.status, 200);
+assert.match(worker.headers.get('content-type'), /application\/javascript/);
+const workerSource = await worker.text();
+assert.match(workerSource, /checkers-local-/);
+assert.match(workerSource, /\/_next\/static\//);
+assert.match(workerSource, /wood-table-001\.jpg/);
+const readinessAbort = new AbortController();
+const readiness = await fetch(origin + '/api/connection', { signal: readinessAbort.signal });
+assert.equal(readiness.status, 200);
+assert.match(readiness.headers.get('content-type'), /text\/event-stream/);
+const readinessReader = readiness.body.getReader();
+const readinessEvent = new TextDecoder().decode((await readinessReader.read()).value);
+assert.deepEqual(JSON.parse(readinessEvent.trim().slice(6)), { connected: true });
+await readinessReader.cancel();
+readinessAbort.abort();
+
 const headers = name => ({
   'content-type': 'application/json',
   'x-player-instance': randomUUID(),

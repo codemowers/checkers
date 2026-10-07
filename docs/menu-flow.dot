@@ -24,7 +24,12 @@ digraph MenuFlow {
     guest [label="Join as Black; complete 180° turn swiftly\nContinue from current orientation\nUse that host's opening"];
     to_wait [label="Continue at 2 · Waiting host", shape=oval, fillcolor="#dcfce7", color="#15803d"];
     to_play [label="Continue at 4 · Playing", shape=oval, fillcolor="#dcfce7", color="#15803d"];
-    home -> home_auth;
+    session_check [label="Session cookie present but invalid?\nIncludes NEXTAUTH_SECRET reset", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
+    session_reset [label="Clear session cookies; log out\nGame API: reject request with 401\nSign in again; return to the same page"];
+    home -> session_check;
+    session_check -> home_auth [label="No · valid session or no cookie"];
+    session_check -> session_reset [label="Yes · authentication enabled"];
+    session_reset -> home_auth [label="Login succeeds · home return URL"];
     home_auth -> home_login [label="Yes · login required"];
     home_auth -> rules_choice [label="No · enter lobby"];
     home_login -> rules_choice [label="Login succeeds"];
@@ -32,9 +37,16 @@ digraph MenuFlow {
     rules_choice -> selectable_rules [label="english-default / international-default"];
     fixed_rules -> opening;
     selectable_rules -> opening;
-    opening -> invite_mode;
+    online_stream [label="Server readiness SSE established?\nRedis/Dragonfly check succeeds", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
+    offline_choices [label="Hide online invitations and matching\nDisable online opening moves\nKeep Local play / Watch demo if enabled"];
+    opening -> online_stream;
+    online_stream -> invite_mode [label="Yes · offer online choices"];
+    online_stream -> offline_choices [label="No · connect / reconnect"];
+    offline_choices -> online_stream [label="Retry connection"];
     invite_mode -> host [label="No · private invitation"];
-    invite_mode -> queue [label="Yes · look for waiting opponent"];
+    invite_mode -> queue [label="Yes · default: listen for offers"];
+    queue -> private_host [label="Click Start new game: opt out"];
+    private_host -> queue [label="Click Find opponent: re-enable matching"];
     match_offer [label="<Host name> wants to play with you.\nDo you accept?\nSlow turn toward Black; camera rises briefly\nSeat is not reserved yet", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     private_host [label="Turn back to Red\nFresh opening; stop offers\nCreate private table after your move"];
     offer_computer [label="Return to a fresh Red opening\nYour move creates a computer game\nENABLE_COMPUTER=true only"];
@@ -46,13 +58,14 @@ digraph MenuFlow {
     accept_result -> match_rejected [label="No"];
     match_offer -> private_host [label="Start a new game"];
     match_offer -> offer_computer [label="Play against computer instead"];
-    private_host -> to_wait;
+    private_host -> invite_copy [label="Local feature disabled: submit opening\nPrivate table created"];
     offer_computer -> to_play;
     queue -> host [label="No · play your opening\nor keep listening for offers"];
-    host -> to_wait;
+    host -> to_wait [label="Matching enabled: play Red\nAutomatically publish waiting table"];
+    host -> invite_copy [label="Local feature disabled: submit opening\nPrivate invitation selected; table created"];
     guest -> to_play;
     scene_note [shape=note, style=filled, fillcolor="#f1f5f9", color="#94a3b8",
-      label="Presentation shared across lobby / offer / waiting / playing:\nPreload wood; show Setting the table… until ready.\nIf loading fails, use plain colours so play remains available.\nKeep the same canvas through transitions.\nFelt extends beyond view; broad lamp beam and soft ambient light.\nBoard and shadow turn together; camera rises then restores its tilt.\nAccept / Start a new game continue from the current orientation.\nReduced motion: snap to the seat without the turn or camera lift."];
+      label="Presentation shared across lobby / offer / waiting / playing:\nPreload wood; show Setting the table… until ready.\nIf loading fails, use plain colours so play remains available.\nKeep the same canvas through transitions.\nFelt extends beyond view; broad lamp beam and soft ambient light.\nShadow maps on at every quality level; raised piece shadows widen and soften with height.\nLamp beam / bulb glow / restored bloom fade in; reduced motion is immediate.\nBoard and shadow turn together; camera rises then restores its tilt.\nAccept / Start a new game continue from the current orientation.\nReduced motion: snap to the seat without the turn or camera lift.\nStart at pixel ratio 1 with vertex-lit textures; reflections / bloom / dust / smoke off.\nSustained high FPS restores physical materials + reflections, then bloom / dust, then smoke.\nVisible FPS: 100 ms warm-up, then sample every 250 ms.\nThree consecutive samples at least 50 FPS: unlock one quality step in about 0.9 s.\nKeep unlocked features even if FPS drops or play / demo changes.\nRefresh tab: reset to pixel ratio 1 and simple materials; optional effects off.\nOverhead: skip lamp fixture / beam; smoke and steam off; keep lighting.\nTilt away: restore effects at current quality level.\nHidden tab / resume gap / view change: restart FPS samples.\nSame avatar / name / score component with colon separator, no colour chips in lobby, online, local and demo.\nFullscreen hides scores, FPS and dialogs; SVG film grain disabled.\nCompact header: hide brand, retain scores and login; narrow phones hide player names.\nShared top bar for lobby / local / online / spectators / demo.\nEqual left / right header margins; borderless fullscreen icon on right, after buttons; Quit game in status dialog.\nDialog buttons form a row when space permits; wrap and scroll within viewport."];
     to_play -> scene_note [style=invis];
   }
 
@@ -60,7 +73,9 @@ digraph MenuFlow {
     graph [label="2. Waiting host", color="#94a3b8", sortv=2];
     waiting [label="Waiting as Red\nTable has no expiry", shape=oval, fillcolor="#dcfce7", color="#15803d"];
     waiting_event [label="What happens next?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
-    invite_copy [label="Copy game URL\nButton: Link copied for 3 seconds"];
+    invite_copy [label="Copy game URL\nClipboard write succeeds?", shape=diamond];
+    invite_copied [label="Button: Link copied for 3 seconds"];
+    invite_copy_failed [label="Show clipboard error in waiting dialog\nRetry Invite or copy address-bar URL"];
     invite_return [label="Still waiting\nRecipient follows 3 · Open game link", shape=oval, fillcolor="#dcfce7", color="#15803d"];
     computer [label="Fill Black seat with computer\nComputer replies to your opening"];
     human [label="Fill Black seat with human\nStart 3-minute reconnect grace"];
@@ -68,10 +83,14 @@ digraph MenuFlow {
     wait_quit [label="Delete table\nReturn to opening board", shape=oval, fillcolor="#fee2e2", color="#b91c1c"];
     waiting -> waiting_event;
     waiting_event -> invite_copy [label="Click Invite"];
+    waiting_event -> private_host [label="Public table: click Start new game\nWithdraw table; opt out"];
     waiting_event -> computer [label="Click Play against computer instead\nOnly shown if ENABLE_COMPUTER=true"];
     waiting_event -> human [label="Human claims seat\nafter accepting a link or match offer"];
-    waiting_event -> wait_quit [label="Click Quit game"];
-    invite_copy -> invite_return;
+    waiting_event -> wait_quit [label="Click Quit game in dialog"];
+    invite_copy -> invite_copied [label="Yes"];
+    invite_copy -> invite_copy_failed [label="No"];
+    invite_copied -> invite_return;
+    invite_copy_failed -> invite_return;
     computer -> wait_play;
     human -> wait_play;
   }
@@ -79,6 +98,7 @@ digraph MenuFlow {
   subgraph cluster_link {
     graph [label="3. Open a game link", color="#94a3b8", sortv=3];
     link [label="Open /games/<id>\nKeep that game's stored rules", shape=oval, fillcolor="#dcfce7", color="#15803d"];
+    link_session [label="Session cookie present but invalid?\nAuthentication enabled", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     exists [label="Game still exists?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     missing [label="Game no longer available\nOffer Play again", shape=oval, fillcolor="#fee2e2", color="#b91c1c"];
     own_seat [label="Your identity already\nhas a seat?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
@@ -95,7 +115,10 @@ digraph MenuFlow {
     claim_result [label="Claim result?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     joined [label="Play as Black\nContinue at 4 · Playing", shape=oval, fillcolor="#dcfce7", color="#15803d"];
     rejected [label="Show reason\nFull / deleted table, or already in another game", shape=oval, fillcolor="#fee2e2", color="#b91c1c"];
-    link -> exists;
+    link -> link_session;
+    link_session -> exists [label="No · valid session or no cookie"];
+    link_session -> session_reset [label="Yes · log in again"];
+    session_reset -> link [label="Login succeeds · game return URL"];
     exists -> missing [label="No"];
     exists -> own_seat [label="Yes"];
     own_seat -> resume [label="Yes"];
@@ -134,8 +157,15 @@ digraph MenuFlow {
     playing -> event;
     event -> share_copy [label="Click Share game\nOnly shown if SPECTATOR_MODE=invite"];
     event -> result [label="Game finishes"];
-    event -> quit [label="Click Quit game"];
+    event -> quit [label="Click Quit game in dialog"];
     event -> reconnect [label="Human opponent disconnects"];
+    stream_retry [label="Keep board; show Reconnecting\nRetry stream every 1.5 seconds"];
+    stream_snapshot [label="Game snapshot received?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
+    event -> stream_retry [label="Your stream fails or closes"];
+    stream_retry -> stream_snapshot [label="Reconnect to table"];
+    stream_snapshot -> stream_retry [label="No: connection fails or closes"];
+    stream_snapshot -> still_playing [label="Yes: restore game status\nEven if revision is unchanged"];
+    stream_retry -> timeout [label="Table ended or no longer available"];
     share_copy -> still_playing [label="Copied"];
     reconnect -> still_playing [label="Yes"];
     reconnect -> timeout [label="No"];
@@ -188,7 +218,16 @@ digraph MenuFlow {
     cancelled [label="Keep existing name", shape=oval, fillcolor="#dcfce7", color="#15803d"];
     extras -> demo_enabled [label="Watch demo (lobby)"];
     extras -> identity [label="Manage identity"];
-    demo_enabled -> demo [label="Yes · show button"];
+    login_visible [label="OIDC enabled and signed out?", shape=diamond];
+    login_top [label="Show Log in in top bar\nLobby, local, game, spectator and demo"];
+    login_absent [label="Hide Log in: signed in or anonymous-only mode"];
+    extras -> login_visible [label="Login availability"];
+    login_visible -> login_top [label="Yes"];
+    login_visible -> login_absent [label="No"];
+    demo_opening [label="No opening move yet?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
+    demo_enabled -> demo_opening [label="Yes"];
+    demo_opening -> demo [label="Yes: show Watch demo"];
+    demo_opening -> no_demo [label="No: hide Watch demo"];
     demo_enabled -> no_demo [label="No"];
     demo -> demo_action;
     demo_action -> pause [label="Pause / Resume"];
@@ -202,6 +241,67 @@ digraph MenuFlow {
     extra_note [shape=note, style=filled, fillcolor="#f1f5f9", color="#94a3b8",
       label="Anonymous Log in button: shown unless AUTH_MODE=anon;\nsuccessful login returns to the same page.\nAUTH_MODE unset: complete OIDC config → enforced; otherwise anon.\nJoined games expire 24 hours after the last move.\nComputer games have no opponent reconnect deadline."];
     cancelled -> extra_note [style=invis];
+  }
+
+  subgraph cluster_local {
+    graph [label="7. Shared opening and offline access", color="#94a3b8", sortv=7];
+    local_flag [label="ENABLE_LOCAL_PLAY=true?", shape=diamond];
+    local_disabled [label="Disable local moves; /local returns 404\nRemove cache on next online visit"];
+    local_open [label="Shared GameRoom on home and /local\nFresh board on every load; no game persistence"];
+    local_draft [label="Initial hint: Make your opening move\nAfter Red: Move Black to play locally\nHome + matching enabled + online: publish Red opening automatically\n/local or offline: Red opening stays in browser\nStart new game: private opening; Find opponent: opt back in\nRules switch only before opening\nComputer choice only after Red opening\nLobster (Red) / Gorilla (Black) icons and scores"];
+    local_choice [label="Player chooses?", shape=diamond];
+    local_online [label="Server readiness SSE established?", shape=diamond];
+    local_hide [label="Hide invite, matching and computer buttons\nLocal moves remain playable"];
+    local_publish [label="Submit same Red opening\nSign in if API requires it; return to fresh opening\nInvite/computer: private; Find: matchmaking"];
+    local_table [label="Black replies: committed local game\nHide lobby choices and rules switch\nFixed Red orientation; browser rules and in-memory state"];
+    local_action [label="Local player chooses?", shape=diamond];
+    local_reset [label="Quit / Play again: reset board\nFresh opening on same canvas"];
+    local_detach [label="Waiting Red host moves Black?\nFeature enabled; revision and waiting seat checked", shape=diamond];
+    local_conflict [label="Seat claimed / revision changed\nKeep online game; show reason"];
+    cache_conditions [label="Production, secure origin and storage available?", shape=diamond];
+    cache_install [label="Background cache: public shell, chunks, styles, wood\nNever cache account, OAuth, online tables or APIs"];
+    cache_success [label="All required assets cached?", shape=diamond];
+    cache_ready [label="Keep complete cache; no status text"];
+    cache_failed [label="Discard incomplete cache\nCurrent local board still playable"];
+    offline_reload [label="Home or /local reload: server unreachable / 5xx?", shape=diamond];
+    cached_local [label="Use cached public shell; start fresh board\nHide server buttons until readiness SSE connects"];
+    online_reload [label="Use server response; refresh cache as one build"];
+    extras -> local_flag [label="Local availability"];
+    local_flag -> local_disabled [label="No"];
+    local_flag -> local_open [label="Yes"];
+    local_flag -> cache_conditions [label="Yes: online visit"];
+    local_open -> local_draft;
+    opening -> local_draft [label="Local feature enabled: Red opening"];
+    local_draft -> local_choice;
+    local_choice -> local_draft [label="Play Red: retain choices"];
+    local_draft -> local_reset [label="After Red opening: click Quit game"];
+    local_choice -> local_table [label="Play Black"];
+    local_choice -> local_online [label="Online options"];
+    local_online -> local_hide [label="No"];
+    local_hide -> local_draft;
+    local_online -> local_publish [label="Yes: default matching on home: play Red\nor choose Invite / Find / Computer after Red"];
+    local_publish -> invite_copy [label="Invite: private table created"];
+    local_publish -> to_wait [label="Find: host table created"];
+    local_publish -> match_offer [label="Find returns existing offer"];
+    local_publish -> to_play [label="Computer joins"];
+    local_table -> local_action;
+    local_action -> local_table [label="Legal move / capture continuation"];
+    local_action -> local_reset [label="Quit / Play again after result"];
+    local_reset -> local_draft;
+    waiting_event -> local_detach [label="Move Black: local feature enabled"];
+    local_detach -> local_table [label="Yes: withdraw table, play Black locally"];
+    local_detach -> local_conflict [label="No: keep online table"];
+    cache_conditions -> cache_install [label="Yes"];
+    cache_conditions -> cache_failed [label="No"];
+    cache_install -> cache_success;
+    cache_success -> cache_ready [label="Yes"];
+    cache_success -> cache_failed [label="No"];
+    cache_ready -> offline_reload [label="Later reload"];
+    offline_reload -> cached_local [label="Yes"];
+    offline_reload -> online_reload [label="No"];
+    cached_local -> local_open;
+    online_reload -> local_open [label="Still enabled"];
+    online_reload -> local_disabled [label="Now disabled"];
   }
   // Invisible constraints place panels in two columns without Graphviz's
   // packed-component layout, which drops edge labels in Graphviz 2.43.

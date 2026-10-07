@@ -1,5 +1,6 @@
 import { saveGame } from "./game-persistence";
 import { gameChannel, lobbyChannel } from "./game-events";
+import { lobbyEvents } from "./lobby-events";
 import { END_GAME, RECONNECT_GRACE_MS } from "./game-store";
 import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
@@ -8,7 +9,7 @@ import { claimSeat, matchPlayer, CLAIM_SEAT, MATCH } from "./matchmaking";
 import { applyMove, legalMoves, newGame } from "./rules";
 import { playComputerTurn } from "./computer";
 import type { Ruleset } from "./rulesets";
-import type { Game } from "./types";
+import type { Game, PublicGame } from "./types";
 
 const url = process.env.TEST_REDIS_URL;
 describe.skipIf(!url)("human-first lobby (Redis)", () => {
@@ -35,11 +36,37 @@ describe.skipIf(!url)("human-first lobby (Redis)", () => {
     return result;
   }
   async function game(id: string) { return JSON.parse((await redis.get(`${prefix}game:${id}`))!) as Game; }
+  it("offers a published Red opening over SSE to a guest who has made no move", async () => {
+    const aborter = new AbortController();
+    const response = lobbyEvents(new Request("http://localhost/api/game/match?ruleset=english", { signal: aborter.signal }), redis, {
+      waiting: `${prefix}waiting:english`, presence: `${prefix}presence`, game: id => `${prefix}game:${id}`,
+    }, "idle-guest", "english");
+    const reader = response.body!.getReader();
+    const readOffer = async () => {
+      const { value, done } = await reader.read();
+      expect(done).toBe(false);
+      return JSON.parse(new TextDecoder().decode(value).slice(6).trim()) as { game: PublicGame | null };
+    };
+    try {
+      expect((await readOffer()).game).toBeNull();
+      await match("private-host", "english", "invite");
+      const host = await match("public-host", "english");
+      const offered = (await readOffer()).game!;
+      expect(offered.id).toBe(host[1]);
+      expect(offered.turn).toBe(1);
+      expect(offered.you).toBeNull();
+      expect(offered.players.every(player => !("id" in player))).toBe(true);
+      expect(await redis.hget(`${prefix}users`, "idle-guest")).toBeNull();
+      expect((await game(host[1])).players[1].id).toBe("");
+      expect(await claim(host[1], "idle-guest")).toBe(1);
+      expect((await readOffer()).game).toBeNull();
+    } finally { aborter.abort(); await reader.cancel(); }
+  });
   it("keeps invitation tables out of automatic matchmaking and accepts a URL seat claim", async () => {
     const publicTable = await match("public-host");
     const invitation = await match("inviter", "international", "invite");
     expect(invitation[1]).not.toBe(publicTable[1]);
-    expect(await redis.zrange(`${prefix}waiting:international`, 0, -1)).toEqual([publicTable[1]]);
+    expect(await redis.zrange(`${prefix}waiting:international`, "0", "-1")).toEqual([publicTable[1]]);
     expect(await match("public-guest")).toEqual(publicTable);
     const uninvited = await match("uninvited");
     expect(uninvited[1]).not.toBe(invitation[1]);
@@ -295,7 +322,7 @@ describe.skipIf(!url)("human-first lobby (Redis)", () => {
     const own = await match("new-guest", "english", "invite");
     expect(own[1]).not.toBe(host[1]);
     expect((await game(own[1])).matchmaking).toBe(false);
-    expect(await redis.zrange(`${prefix}waiting:english`, 0, -1)).toEqual([host[1]]);
+    expect(await redis.zrange(`${prefix}waiting:english`, "0", "-1")).toEqual([host[1]]);
   });
 
   it("lets only one of two offered players accept the seat", async () => {

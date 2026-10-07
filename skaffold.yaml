@@ -10,14 +10,22 @@ build:
   artifacts:
     - image: checkers
       context: .
-deploy:
-  kubeContext: admin@ee-lte-1.codemowers.io
+manifests:
   helm:
     releases:
       - name: checkers
         chartPath: chart
         namespace: demo
         setValues:
+          networkPolicy.enabled: true
           env.AUTH_MODE: optional
+          env.ENABLE_LOCAL_PLAY: "true"
         setValueTemplates:
           image: "{{.IMAGE_FULLY_QUALIFIED_checkers}}"
+
+deploy:
+  kubectl:
+    flags:
+      # Keep labeled chart resources when Skaffold cleans up.
+      delete:
+        - --selector=skaffold.dev/keep!=true

@@ -14,18 +14,18 @@ export function PlayerAvatar({ src, name, computer }: { src?: string | null; nam
   return <img className="player-avatar" src={src} alt="" width={28} height={28} referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
 }
 
-export function PlayerHeader({ game, playerAvatar }: { game: PublicGame; playerAvatar?: string | null }) {
+export function PlayerHeader({ game, playerAvatar, local = false }: { game: PublicGame; playerAvatar?: string | null; local?: boolean }) {
   const captured = capturedCounts(game);
-  const first = game.you ?? 0;
-  return <div className="nav-match">
+  const first = local ? 0 : game.you ?? 0;
+  const players: PublicGame["players"] = local ? [{ name: "Lunar Lobster", anonymous: true }, { name: "Groovy Gorilla", anonymous: true }] : game.players;
+  return <div className="nav-match" aria-label="Pieces captured">
     {[first, 1 - first].map((side, index) => <Fragment key={side}>
-      {index === 1 && <em>VS</em>}
+      {index === 1 && <em>:</em>}
       <span className={game.turn === side ? "active" : ""}>
         {index === 1 && <strong title="Pieces captured">{captured[side]}</strong>}
-        <PlayerAvatar computer={game.players[side].computer} name={game.players[side].anonymous ? game.players[side].name : undefined} src={game.players[side].avatar || (side === game.you ? playerAvatar : undefined)} />
-        <b className={side === 0 ? "red-chip" : "dark-chip"} />
-        <span title={game.players[side].name || "Open seat"}>
-          {game.players[side].name || "Open seat"}
+        <PlayerAvatar computer={players[side].computer} name={players[side].anonymous ? players[side].name : undefined} src={players[side].avatar || (side === game.you ? playerAvatar : undefined)} />
+        <span title={players[side].name || "Open seat"}>
+          {players[side].name || "Open seat"}
           <small>{side === 0 ? "RED" : "BLACK"}</small>
         </span>
         {index === 0 && <strong title="Pieces captured">{captured[side]}</strong>}

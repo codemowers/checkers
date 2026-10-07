@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import { authOptions } from "../lib/auth";
 import { authMode } from "../lib/auth-mode";
-import { computerEnabled, demoEnabled, matchmakingEnabled, spectatorMode } from "../lib/features";
+import { computerEnabled, demoEnabled, matchmakingEnabled, localPlayEnabled, spectatorMode } from "../lib/features";
 import GameRoom from "./game-room";
 import { rulesConfig } from "../lib/rules-config";
 
@@ -23,9 +23,9 @@ export default async function AuthenticatedGame({ gameId }: { gameId?: string })
     playerAvatar={anonymous ? undefined : session?.user?.image}
     anonymous={anonymous}
     allowSignIn={mode !== "anon" && anonymous}
-    inviteOnly={mode === "invite"}
     enableMatchmaking={matchmakingEnabled()}
     enableComputer={computerEnabled()}
     enableDemo={demoEnabled()}
+    enableLocalPlay={localPlayEnabled()}
   />;
 }
