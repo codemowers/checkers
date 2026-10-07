@@ -12,12 +12,3 @@ spec:
     kind: ClusterIssuer
     group: cert-manager.io
 {{- end }}
----
-apiVersion: traefik.io/v1alpha1
-kind: ServersTransport
-metadata:
-  name: checkers
-spec:
-  serverName: checkers-web.{{ .Release.Namespace }}
-  rootCAsSecrets:
-    - checkers-web-internal-tls

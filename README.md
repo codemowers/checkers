@@ -64,7 +64,7 @@ All replicas must share `NEXTAUTH_SECRET`. Changing it invalidates sessions; res
 
 ## Deployment and checks
 
-The [Helm chart](chart/) defaults to `image: checkers:latest` and `imageRegistry: ghcr.io/codemowers`. Set a published release and configure `env` for your installation. Fully qualified image paths override the registry prefix; an empty prefix leaves short names unchanged.
+The [Helm chart](chart/) defaults to `image: checkers:latest` and `imageRegistry: ghcr.io/codemowers`. Set a published release and configure `env` for your installation. Fully qualified image paths override the registry prefix; an empty prefix leaves short names unchanged. The platform injects ingress and service annotations for routing and internal TLS transport.
 
 Network policies are disabled by default (`networkPolicy.enabled: false`). Their selectors target the Codemowers cluster's Traefik, Prometheus, DNS and Dragonfly pods. [Skaffold](skaffold.yaml) enables them, supplies its built image and deploys to namespace `demo` using the current Kubernetes context.
 
