@@ -37,6 +37,8 @@ COPY scripts ./scripts
 RUN npm run build
 
 FROM base AS runtime
+# The production server runs directly with Node; npm is only needed for builds.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 ENV NODE_ENV=production
 COPY --from=build /app/public ./public
 COPY --from=build /app/.next/standalone ./
