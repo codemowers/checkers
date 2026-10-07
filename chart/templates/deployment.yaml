@@ -32,7 +32,7 @@ spec:
               drop:
                 - ALL
           ports:
-            - name: http
+            - name: {{ ternary "https" "http" .Values.https.enabled }}
               containerPort: 3001
             - name: metrics
               containerPort: 3002
@@ -78,10 +78,12 @@ spec:
                 secretKeyRef:
                   name: checkers-redis-auth
                   key: password
+            {{- if .Values.https.enabled }}
             - name: TLS_CERT_FILE
               value: /var/run/tls/tls.crt
             - name: TLS_KEY_FILE
               value: /var/run/tls/tls.key
+            {{- end }}
           readinessProbe:
             httpGet:
               scheme: HTTP
@@ -89,9 +91,11 @@ spec:
               port: metrics
             initialDelaySeconds: 3
           volumeMounts:
+            {{- if .Values.https.enabled }}
             - name: tls
               mountPath: /var/run/tls
               readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
           resources:
@@ -102,9 +106,11 @@ spec:
               cpu: 500m
               memory: 512Mi
       volumes:
+        {{- if .Values.https.enabled }}
         - name: tls
           secret:
             secretName: checkers-web-internal-tls
+        {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi

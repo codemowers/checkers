@@ -1,4 +1,8 @@
 domain: checkers
+
+# Public listener uses HTTP unless the deployment enables HTTPS.
+https:
+  enabled: false
 # Registry/namespace prefix for short image names. Full image paths override it.
 imageRegistry: ghcr.io/codemowers
 image: checkers:latest

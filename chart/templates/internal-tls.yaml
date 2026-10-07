@@ -1,4 +1,8 @@
-{{- range $service := list "checkers-web" "checkers-redis" }}
+{{- $services := list "checkers-redis" }}
+{{- if .Values.https.enabled }}
+{{- $services = prepend $services "checkers-web" }}
+{{- end }}
+{{- range $service := $services }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate

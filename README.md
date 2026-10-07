@@ -64,7 +64,7 @@ All replicas must share `NEXTAUTH_SECRET`. Changing it invalidates sessions; res
 
 ## Deployment and checks
 
-The [Helm chart](chart/) defaults to `image: checkers:latest` and `imageRegistry: ghcr.io/codemowers`. Set a published release and configure `env` for your installation. Fully qualified image paths override the registry prefix; an empty prefix leaves short names unchanged. The platform injects ingress and service annotations for routing and internal TLS transport.
+The [Helm chart](chart/) defaults to `image: checkers:latest` and `imageRegistry: ghcr.io/codemowers`. Set a published release and configure `env` for your installation. Fully qualified image paths override the registry prefix; an empty prefix leaves short names unchanged. The public listener defaults to HTTP. Set `https.enabled=true` to mount its certificate and expose HTTPS through Service port 443; Skaffold enables this override. HTTPS also creates a ServersTransport and attaches it to the Service, so Traefik verifies the backend certificate against the Service DNS name. Traefik uses the platform-mounted CA bundle; the platform supplies public ingress TLS.
 
 Network policies are disabled by default (`networkPolicy.enabled: false`). Their selectors target the Codemowers cluster's Traefik, Prometheus, DNS and Dragonfly pods. [Skaffold](skaffold.yaml) enables them, supplies its built image and deploys to namespace `demo` using the current Kubernetes context.
 

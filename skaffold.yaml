@@ -17,6 +17,7 @@ manifests:
         chartPath: chart
         namespace: demo
         setValues:
+          https.enabled: true
           networkPolicy.enabled: true
           env.AUTH_MODE: optional
           env.ENABLE_LOCAL_PLAY: "true"
