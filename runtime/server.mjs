@@ -60,5 +60,6 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 server.listen(port, hostname, () => {
   ready = true;
-  console.info(`Checkers listening on ${certificate ? 'https' : 'http'}://${hostname}:${port}`);
+  const host = hostname === '::' || hostname === '0.0.0.0' ? 'localhost' : hostname.includes(':') ? `[${hostname}]` : hostname;
+  console.info(`Checkers available at ${process.env.NEXTAUTH_URL || `${certificate ? 'https' : 'http'}://${host}:${server.address().port}`}`);
 });

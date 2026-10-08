@@ -12,7 +12,11 @@ const app = next({ dev: true, webpack: true, hostname, port });
 await app.prepare();
 const server = http.createServer(app.getRequestHandler());
 server.on('upgrade', app.getUpgradeHandler());
-server.listen(port, hostname, () => { ready = true; });
+server.listen(port, hostname, () => {
+  ready = true;
+  const host = hostname === '::' || hostname === '0.0.0.0' ? 'localhost' : hostname.includes(':') ? `[${hostname}]` : hostname;
+  console.info(`Checkers available at ${process.env.NEXTAUTH_URL || `http://${host}:${server.address().port}`}`);
+});
 function shutdown() {
   ready = false;
   internal.close();

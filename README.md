@@ -2,6 +2,26 @@
 
 WebGL checkers with English (8×8) and International (10×10) rules, computer play, shared-device play and spectators. Next.js serves the UI, APIs and OpenID login; Redis/Dragonfly stores online games.
 
+## Codemowers Cloud sandbox
+
+Obtain a Codemowers Cloud sandbox at [trial.codemowers.io](https://trial.codemowers.io). Follow the instructions on that site to:
+
+* Install Skaffold.
+* Install kubectl.
+* Install the OIDC authentication plugin for kubectl.
+* Configure your Kubernetes client with the sandbox kubeconfig.
+* Set up `skaffold.env` in the project root.
+
+Proceed to build locally using Docker and deploy to sandbox with:
+
+```
+skaffold dev
+```
+
+Open the URL in the application's startup log: `Checkers available at https://…`. Skaffold streams this log after the application starts.
+
+## Docker Compose
+
 ```sh
 docker compose up --build
 docker compose --profile test run --build --rm test
@@ -43,7 +63,7 @@ Read at startup; restart after changing configuration. Feature switches accept `
 | `AUTH_MODE` | Auto | `anon`: anonymous only; `optional`: anonymous or login; `enforced`: login required; `invite`: authenticated hosts, anonymous or authenticated invitees. Auto selects enforced with complete OIDC configuration, otherwise anon. |
 | `RULES` | `english-default` | `english` or `international`: fixed rules for new games. `english-default` or `international-default`: start with those rules and allow switching before starting a game. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Unset | All required for authentication modes other than anon. |
-| `NEXTAUTH_URL`, `NEXTAUTH_SECRET` | Unset | Public origin and shared session secret for login. |
+| `NEXTAUTH_URL`, `NEXTAUTH_SECRET` | Unset | Public origin and shared session secret for login. The startup log uses `NEXTAUTH_URL` as the application URL, falling back to the local listener when unset. |
 | `SPECTATOR_MODE` | `invite` | Invite links open as spectators; **Accept** takes the opponent seat. `disabled` joins immediately and disables spectating. |
 | `ENABLE_MATCHMAKING` | `true` | Stream waiting opponents immediately on entering the lobby, in every auth mode. `false` creates private invitation tables only. Accept is required to claim an offered seat. |
 | `ENABLE_COMPUTER` | `true` | Allow filling the opponent seat with a computer. |
