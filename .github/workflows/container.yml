@@ -15,10 +15,6 @@ concurrency:
   group: container-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -55,7 +51,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v4
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -63,7 +59,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ghcr.io/${{ github.repository }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.url=https://github.com/codemowers
@@ -134,17 +130,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Package chart with release image
-        env:
-          VERSION: ${{ github.ref_name }}
-          OWNER: ${{ github.repository_owner }}
         run: |
-          version="${VERSION#v}"
-          mkdir -p "$RUNNER_TEMP/chart" "$RUNNER_TEMP/package"
-          cp -R chart/. "$RUNNER_TEMP/chart/"
-          sed -i "s|^imageRegistry:.*|imageRegistry: ghcr.io/${OWNER}|" "$RUNNER_TEMP/chart/values.yaml"
-          image="ghcr.io/${OWNER}/checkers:${version}"
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p "$RUNNER_TEMP/package"
+          image="ghcr.io/${{ github.repository_owner }}/checkers:${version}"
           digest="$(docker buildx imagetools inspect "$image" | awk '/Digest:/ { print $2; exit }')"
           test -n "$digest"
-          sed -i "s|^image:.*|image: checkers@${digest}|" "$RUNNER_TEMP/chart/values.yaml"
-          helm package "$RUNNER_TEMP/chart" --destination "$RUNNER_TEMP/package" --version "$version" --app-version "$VERSION"
-          helm push "$RUNNER_TEMP/package/checkers-$version.tgz" "oci://ghcr.io/${OWNER}/charts"
+          RELEASE_IMAGE_REPOSITORY="ghcr.io/${{ github.repository_owner }}" RELEASE_IMAGE="checkers@${digest}" \
+            yq -i '.imageRepository = strenv(RELEASE_IMAGE_REPOSITORY) | .image = strenv(RELEASE_IMAGE)' chart/values.yaml
+          helm package chart --destination "$RUNNER_TEMP/package" --version "$version" --app-version "$GITHUB_REF_NAME"
+          helm push "$RUNNER_TEMP/package/checkers-$version.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"

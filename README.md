@@ -27,7 +27,7 @@ docker compose up --build
 docker compose --profile test run --build --rm test
 ```
 
-Open <http://localhost:3001>. Compose enables anonymous and local play with disposable Dragonfly state. The test service runs typechecking, runtime checks and game tests against Dragonfly.
+Open <http://localhost:48327>. Compose enables anonymous and local play with disposable Dragonfly state. The test service runs typechecking, runtime checks and game tests against Dragonfly.
 
 ## Playing
 
@@ -72,7 +72,7 @@ Read at startup; restart after changing configuration. Feature switches accept `
 | `ALLOW_SELF_PLAY` | `false` | Give authenticated users separate seats per tab; anonymous seats always use per-tab identities. |
 | `REDIS_URL` | `redis://checkers-redis:6379/0` | Game storage and pub/sub URL. |
 | `REDIS_PASSWORD` | Unset | Separate Redis password. |
-| `PORT`, `HOSTNAME` | `3000`, `::` | Public listener; Docker sets port `3001`. |
+| `PORT`, `HOSTNAME` | `3000`, `::` | Public listener; Docker sets port `48327`. |
 | `METRICS_PORT` | `3002` | Internal HTTP listener: `/metrics`, `/health`, `/ready`. |
 | `TLS_CERT_FILE`, `TLS_KEY_FILE` | Unset | Set both PEM paths to enable HTTPS on the public listener; metrics and health always use HTTP. |
 | `NODE_EXTRA_CA_CERTS` | Unset | CA bundle for internal TLS. |
@@ -84,9 +84,9 @@ All replicas must share `NEXTAUTH_SECRET`. Changing it invalidates sessions; res
 
 ## Deployment and checks
 
-The [Helm chart](chart/) defaults to `image: checkers:latest` and `imageRegistry: ghcr.io/codemowers`. Set a published release and configure `env` for your installation. Fully qualified image paths override the registry prefix; an empty prefix leaves short names unchanged. The public listener defaults to HTTP. Set `https.enabled=true` to mount its certificate and expose HTTPS through Service port 443; Skaffold enables this override. HTTPS also creates a ServersTransport and attaches it to the Service, so Traefik verifies the backend certificate against the Service DNS name. Traefik uses the platform-mounted CA bundle; the platform supplies public ingress TLS.
+The [Helm chart](chart/) defaults to `image: checkers:latest` and an empty `imageRepository`. When set, `imageRepository` supplies the registry/namespace prefix without a trailing slash. Chart publishing sets it to `ghcr.io/<repository-owner>` and sets `image` to `checkers@<release-digest>`. Override these values for other installations and configure `env`; leave `imageRepository` empty when supplying a fully qualified `image`. The public listener defaults to HTTP. Set `https.enabled=true` to mount its certificate and expose HTTPS through Service port 443; Skaffold enables this override. HTTPS also creates a ServersTransport and attaches it to the Service, so Traefik verifies the backend certificate against the Service DNS name. Traefik uses the platform-mounted CA bundle; the platform supplies public ingress TLS.
 
-Network policies are disabled by default (`networkPolicy.enabled: false`). Their selectors target the Codemowers cluster's Traefik, Prometheus, DNS and Dragonfly pods. [Skaffold](skaffold.yaml) enables them, supplies its built image and deploys to namespace `demo` using the current Kubernetes context.
+Network policies are disabled by default (`networkPolicy.enabled: false`). Their selectors target the Codemowers cluster's Traefik, Prometheus, DNS and Dragonfly pods. [Skaffold](skaffold.yaml) enables them and supplies its built image. Set `SKAFFOLD_KUBE_CONTEXT`, `SKAFFOLD_NAMESPACE` and `SKAFFOLD_DEFAULT_REPO` in your local `skaffold.env` to select the deployment context, namespace and image registry. The namespace also controls Helm-rendered Service references and backend TLS hostnames.
 
 [CI](.github/workflows/container.yml) tests, smoke-tests and scans the image, then publishes it on `v*` tag pushes. Versioned charts at `oci://ghcr.io/<repository-owner>/charts/checkers` reference the matching image digest.
 

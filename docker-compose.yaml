@@ -29,7 +29,7 @@ services:
       SPECTATOR_MODE: ${SPECTATOR_MODE:-invite}
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     ports:
-      - "3001:3001"
+      - "48327:48327"
     volumes:
       - ./app:/app/app:ro
       - ./lib:/app/lib:ro

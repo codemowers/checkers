@@ -7,7 +7,7 @@ RUN wget -q -O wood-table-001.jpg https://dl.polyhaven.org/file/ph-assets/Textur
 FROM node:26-alpine AS base
 RUN apk upgrade --no-cache
 RUN npm install --global npm@12.2.0 && npm cache clean --force
-ENV PORT=3001 \
+ENV PORT=48327 \
     HOSTNAME=::
 WORKDIR /app
 # Stable assets come before dependency and source layers in every target.
