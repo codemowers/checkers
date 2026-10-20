@@ -30,3 +30,35 @@ deploy:
       # Keep labeled chart resources when Skaffold cleans up.
       delete:
         - --selector=skaffold.dev/keep!=true
+
+profiles:
+  # Agent workers share one namespace and may only create resources named
+  # "<agent>-*", so the release is named after the agent. No default
+  # repository or Kaniko context upload (pods/exec) is available to them yet,
+  # so deploy the published image instead of building. PodMonitor creation is
+  # not permitted, and Pods may only reference "<agent>-*" Secrets, which rules
+  # out the OIDCClient's generated oidc-client-<name>-owner-secrets.
+  - name: agent
+    patches:
+      - op: remove
+        path: /build
+      - op: replace
+        path: /manifests/helm/releases/0/name
+        value: "{{.AGENT_NAME}}-checkers"
+      - op: replace
+        path: /manifests/helm/releases/0/namespace
+        value: "{{.SKAFFOLD_NAMESPACE}}"
+      - op: add
+        path: /manifests/helm/releases/0/setValues/podMonitor.enabled
+        value: false
+      - op: add
+        path: /manifests/helm/releases/0/setValues/oidc.enabled
+        value: false
+      - op: replace
+        path: /manifests/helm/releases/0/setValues/env.AUTH_MODE
+        value: anon
+      - op: replace
+        path: /manifests/helm/releases/0/setValueTemplates
+        value:
+          image: checkers:sha-00cde6b
+          domain: "{{.AGENT_NAME}}-checkers"

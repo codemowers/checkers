@@ -1,6 +1,6 @@
-{{- $services := list "checkers-redis" }}
+{{- $services := list (print .Release.Name "-redis") }}
 {{- if .Values.https.enabled }}
-{{- $services = prepend $services "checkers-web" }}
+{{- $services = prepend $services (print .Release.Name "-web") }}
 {{- end }}
 {{- range $service := $services }}
 ---

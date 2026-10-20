@@ -7,6 +7,14 @@ https:
 imageRegistry: ghcr.io/codemowers
 image: checkers:latest
 
+# Passmower login; requires permission to create OIDCClient resources.
+oidc:
+  enabled: true
+
+# Created only when the PodMonitor API is installed.
+podMonitor:
+  enabled: true
+
 # Cluster-specific ingress, DNS and OIDC selectors; enabled by Skaffold.
 networkPolicy:
   enabled: false

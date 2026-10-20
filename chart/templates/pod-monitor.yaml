@@ -1,12 +1,12 @@
-{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor" }}
+{{- if and .Values.podMonitor.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor") }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: checkers
+  name: {{ .Release.Name }}
 spec:
   selector:
     matchLabels:
-      app: checkers-web
+      app: {{ .Release.Name }}-web
   podMetricsEndpoints:
     - port: metrics
 {{- end }}

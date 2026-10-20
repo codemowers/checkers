@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: checkers
+  name: {{ .Release.Name }}
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: checkers-web
+      app: {{ .Release.Name }}-web
   template:
     metadata:
       labels:
-        app: checkers-web
+        app: {{ .Release.Name }}-web
     spec:
       terminationGracePeriodSeconds: 30
       {{- with .Values.imagePullSecret }}
@@ -41,42 +41,44 @@ spec:
             - name: {{ $name }}
               value: {{ $value | quote }}
             {{- end }}
+            {{- if .Values.oidc.enabled }}
             - name: OIDC_IDP_DISPLAY_NAME
               valueFrom:
                 secretKeyRef:
-                  name: oidc-client-checkers-owner-secrets
+                  name: oidc-client-{{ .Release.Name }}-owner-secrets
                   key: OIDC_IDP_DISPLAY_NAME
             - name: OIDC_ISSUER
               valueFrom:
                 secretKeyRef:
-                  name: oidc-client-checkers-owner-secrets
+                  name: oidc-client-{{ .Release.Name }}-owner-secrets
                   key: OIDC_IDP_URI
             - name: NEXTAUTH_URL
               valueFrom:
                 secretKeyRef:
-                  name: oidc-client-checkers-owner-secrets
+                  name: oidc-client-{{ .Release.Name }}-owner-secrets
                   key: OIDC_CLIENT_ORIGIN
             - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: oidc-client-checkers-owner-secrets
+                  name: oidc-client-{{ .Release.Name }}-owner-secrets
                   key: OIDC_CLIENT_ID
             - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: oidc-client-checkers-owner-secrets
+                  name: oidc-client-{{ .Release.Name }}-owner-secrets
                   key: OIDC_CLIENT_SECRET
+            {{- end }}
             - name: NEXTAUTH_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: checkers-nextauth
+                  name: {{ .Release.Name }}-nextauth
                   key: secret
             - name: REDIS_URL
-              value: rediss://checkers-redis.{{ .Release.Namespace }}:6379/0
+              value: rediss://{{ .Release.Name }}-redis.{{ .Release.Namespace }}:6379/0
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: checkers-redis-auth
+                  name: {{ .Release.Name }}-redis-auth
                   key: password
             {{- if .Values.https.enabled }}
             - name: TLS_CERT_FILE
@@ -109,7 +111,7 @@ spec:
         {{- if .Values.https.enabled }}
         - name: tls
           secret:
-            secretName: checkers-web-internal-tls
+            secretName: {{ .Release.Name }}-web-internal-tls
         {{- end }}
         - name: tmp
           emptyDir:

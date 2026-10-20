@@ -88,6 +88,8 @@ The [Helm chart](chart/) defaults to `image: checkers:latest` and `imageRegistry
 
 Network policies are disabled by default (`networkPolicy.enabled: false`). Their selectors target the Codemowers cluster's Traefik, Prometheus, DNS and Dragonfly pods. [Skaffold](skaffold.yaml) enables them, supplies its built image and deploys to namespace `demo` using the current Kubernetes context.
 
+Resource names, pod labels and generated Secret references derive from the Helm release name (`checkers` in Skaffold), so several releases can share a namespace. `oidc.enabled=false` omits the OIDCClient and login variables (use `env.AUTH_MODE=anon`), and `podMonitor.enabled=false` omits the PodMonitor. The Skaffold `agent` profile (`skaffold dev -p agent`) deploys the published image to `$SKAFFOLD_NAMESPACE` as release `$AGENT_NAME-checkers` with anonymous play and without a PodMonitor, for agent workers that may only create `<agent>-*` resources and cannot build in-cluster yet.
+
 [CI](.github/workflows/container.yml) tests, smoke-tests and scans the image, then publishes it on `v*` tag pushes. Versioned charts at `oci://ghcr.io/<repository-owner>/charts/checkers` reference the matching image digest.
 
 Before committing, verify the current checkout:

@@ -2,7 +2,7 @@
 apiVersion: traefik.io/v1alpha1
 kind: ServersTransport
 metadata:
-  name: checkers-tls
+  name: {{ .Release.Name }}-tls
 spec:
-  serverName: checkers-web.{{ .Release.Namespace }}.svc.cluster.local
+  serverName: {{ .Release.Name }}-web.{{ .Release.Namespace }}.svc.cluster.local
 {{- end }}

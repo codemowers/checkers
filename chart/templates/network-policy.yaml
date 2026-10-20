@@ -2,11 +2,11 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: checkers-web
+  name: {{ .Release.Name }}-web
 spec:
   podSelector:
     matchLabels:
-      app: checkers-web
+      app: {{ .Release.Name }}-web
   policyTypes:
     - Ingress
     - Egress
@@ -48,7 +48,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app: checkers-redis
+              app: {{ .Release.Name }}-redis
               app.kubernetes.io/name: dragonfly
               app.kubernetes.io/part-of: dragonfly
       ports:

@@ -3,12 +3,12 @@ kind: Dragonfly
 metadata:
   labels:
     skaffold.dev/keep: "true"
-  name: checkers-redis
+  name: {{ .Release.Name }}-redis
 spec:
   image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.37.0
   authentication:
     passwordFromSecret:
-      name: checkers-redis-auth
+      name: {{ .Release.Name }}-redis-auth
       key: password
   resources:
     requests:
