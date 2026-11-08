@@ -37,6 +37,10 @@ COPY scripts ./scripts
 RUN npm run build
 
 FROM base AS runtime
+LABEL org.opencontainers.image.title="checkers" \
+    org.opencontainers.image.source="https://github.com/codemowers/checkers" \
+    org.opencontainers.image.url="https://github.com/codemowers" \
+    org.opencontainers.image.vendor="Codemowers OÜ"
 # The production server runs directly with Node; npm is only needed for builds.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 ENV NODE_ENV=production

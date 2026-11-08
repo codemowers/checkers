@@ -61,6 +61,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           labels: |
+            org.opencontainers.image.title=checkers
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.url=https://github.com/codemowers
             org.opencontainers.image.vendor=Codemowers OÜ
@@ -82,6 +83,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Verify image metadata
+        env:
+          EXPECTED_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' checkers:ci)" = "$EXPECTED_SOURCE"
+          test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' checkers:ci)" = "$EXPECTED_REVISION"
 
       - name: Test production HTTP and TLS
         run: bash scripts/smoke-image.sh checkers:ci
