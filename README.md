@@ -12,10 +12,16 @@ Obtain a Codemowers Cloud sandbox at [trial.codemowers.io](https://trial.codemow
 * Configure your Kubernetes client with the sandbox kubeconfig.
 * Set up `skaffold.env` in the project root.
 
-Proceed to build locally using Docker and deploy to sandbox with:
+Proceed to build in the sandbox using Kaniko and deploy with:
 
 ```
 skaffold dev
+```
+
+To build with your local Docker daemon instead and push to `SKAFFOLD_DEFAULT_REPO`, use the `local` profile:
+
+```
+skaffold dev -p local
 ```
 
 Open the URL in the application's startup log: `Checkers available at https://…`. Skaffold streams this log after the application starts.
@@ -80,7 +86,7 @@ Read at startup; restart after changing configuration. Feature switches accept `
 | `NODE_EXTRA_CA_CERTS` | Unset | CA bundle for internal TLS. |
 | `TEST_REDIS_URL` | Unset | Disposable Redis/Dragonfly URL; enables storage integration tests. |
 
-Compose forwards feature switches, e.g. `SPECTATOR_MODE=disabled docker compose up --build`. Helm config uses `env`, e.g. `--set env.AUTH_MODE=optional`. The chart defaults to `invite`; Skaffold overrides it to `optional`.
+Compose forwards feature switches, e.g. `SPECTATOR_MODE=disabled docker compose up --build`. Helm config uses `env`, e.g. `--set env.AUTH_MODE=optional`. The chart defaults to `invite`; Skaffold overrides it to `optional`. With `env.AUTH_MODE=anon`, the chart omits the OIDCClient and its OIDC environment variables.
 
 All replicas must share `NEXTAUTH_SECRET`. Changing it invalidates sessions; restart all replicas together. Invalid session cookies are cleared on the next page or game request, then login returns the user to that page. Existing streams are checked on reconnect. Preserve the chart's generated `checkers-nextauth` secret to keep sessions valid.
 
@@ -88,7 +94,7 @@ All replicas must share `NEXTAUTH_SECRET`. Changing it invalidates sessions; res
 
 The [Helm chart](chart/) defaults to `image: checkers:latest` and an empty `imageRepository`. When set, `imageRepository` supplies the registry/namespace prefix without a trailing slash. Chart publishing sets it to `ghcr.io/<repository-owner>` and sets `image` to `checkers@<release-digest>`. Override these values for other installations and configure `env`; leave `imageRepository` empty when supplying a fully qualified `image`. The public listener defaults to HTTP. Set `https.enabled=true` to mount its certificate and expose HTTPS through Service port 443; Skaffold enables this override. HTTPS also creates a ServersTransport and attaches it to the Service, so Traefik verifies the backend certificate against the Service DNS name. Traefik uses the platform-mounted CA bundle; the platform supplies public ingress TLS.
 
-Network policies are disabled by default (`networkPolicy.enabled: false`). Their selectors target the Codemowers cluster's Traefik, Prometheus, DNS and Dragonfly pods. [Skaffold](skaffold.yaml) enables them and supplies its built image. Set `SKAFFOLD_KUBE_CONTEXT`, `SKAFFOLD_NAMESPACE` and `SKAFFOLD_DEFAULT_REPO` in your local `skaffold.env` to select the deployment context, namespace and image registry. The namespace also controls Helm-rendered Service references and backend TLS hostnames.
+Network policies are disabled by default (`networkPolicy.enabled: false`). Their selectors target the Codemowers cluster's Traefik, Prometheus, DNS and Dragonfly pods. [Skaffold](skaffold.yaml) enables them and supplies its built image. Set `SKAFFOLD_KUBE_CONTEXT`, `SKAFFOLD_NAMESPACE` and `SKAFFOLD_DEFAULT_REPO` in your local `skaffold.env` to select the deployment context, namespace and image registry. The namespace also controls Helm-rendered Service references and backend TLS hostnames. Kaniko build pods default to the selected kube-context’s namespace. If overriding the deployment namespace with `SKAFFOLD_NAMESPACE`, also set `build.cluster.namespace` in `skaffold.yaml` to the same existing, non-default namespace. That namespace must contain the `zot-registry-cluster-push-kaniko` secret with a `config.json` key granting push access to `SKAFFOLD_DEFAULT_REPO`.
 
 [CI](.github/workflows/container.yml) tests, smoke-tests and scans the image, then publishes it on `v*` tag pushes. Versioned charts at `oci://ghcr.io/<repository-owner>/charts/checkers` reference the matching image digest.
 

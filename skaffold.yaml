@@ -5,11 +5,14 @@ metadata:
 build:
   platforms:
     - linux/amd64
-  local:
-    push: true
+  cluster:
+    dockerConfig:
+      secretName: zot-registry-cluster-push-kaniko
   artifacts:
     - image: checkers
       context: .
+      kaniko:
+        dockerfile: Dockerfile
 manifests:
   helm:
     releases:
@@ -27,3 +30,17 @@ deploy:
       # Keep labeled chart resources when Skaffold cleans up.
       delete:
         - --selector=skaffold.dev/keep!=true
+
+profiles:
+  # skaffold dev -p local: build with the local Docker daemon and push.
+  - name: local
+    build:
+      platforms:
+        - linux/amd64
+      local:
+        push: true
+      artifacts:
+        - image: checkers
+          context: .
+          docker:
+            dockerfile: Dockerfile
