@@ -37,35 +37,57 @@ spec:
             - name: metrics
               containerPort: 3002
           env:
-            {{- range $name, $value := .Values.env }}
-            - name: {{ $name }}
-              value: {{ $value | quote }}
-            {{- end }}
+            - name: AUTH_MODE
+              value: {{ .Values.authMode | quote }}
+            - name: RULES
+              value: {{ .Values.rules | quote }}
+            - name: SPECTATOR_MODE
+              value: {{ .Values.spectatorMode | quote }}
+            - name: ENABLE_MATCHMAKING
+              value: {{ .Values.enableMatchmaking | quote }}
+            - name: ENABLE_COMPUTER
+              value: {{ .Values.enableComputer | quote }}
+            - name: ENABLE_DEMO
+              value: {{ .Values.enableDemo | quote }}
+            - name: ENABLE_LOCAL_PLAY
+              value: {{ .Values.enableLocalPlay | quote }}
+            - name: ALLOW_SELF_PLAY
+              value: {{ .Values.allowSelfPlay | quote }}
+            {{- if ne .Values.authMode "anon" }}
             - name: OIDC_IDP_DISPLAY_NAME
               valueFrom:
                 secretKeyRef:
                   name: oidc-client-checkers-owner-secrets
                   key: OIDC_IDP_DISPLAY_NAME
+            {{- end }}
+            {{- if ne .Values.authMode "anon" }}
             - name: OIDC_ISSUER
               valueFrom:
                 secretKeyRef:
                   name: oidc-client-checkers-owner-secrets
                   key: OIDC_IDP_URI
+            {{- end }}
+            {{- if ne .Values.authMode "anon" }}
             - name: NEXTAUTH_URL
               valueFrom:
                 secretKeyRef:
                   name: oidc-client-checkers-owner-secrets
                   key: OIDC_CLIENT_ORIGIN
+            {{- end }}
+            {{- if ne .Values.authMode "anon" }}
             - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
                   name: oidc-client-checkers-owner-secrets
                   key: OIDC_CLIENT_ID
+            {{- end }}
+            {{- if ne .Values.authMode "anon" }}
             - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: oidc-client-checkers-owner-secrets
                   key: OIDC_CLIENT_SECRET
+            {{- end }}
             - name: NEXTAUTH_SECRET
               valueFrom:
                 secretKeyRef:

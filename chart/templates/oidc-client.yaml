@@ -1,3 +1,4 @@
+{{- if ne .Values.authMode "anon" }}
 apiVersion: codemowers.cloud/v1
 kind: OIDCClient
 metadata:
@@ -19,3 +20,4 @@ spec:
     - openid
     - profile
     - email
+{{- end }}

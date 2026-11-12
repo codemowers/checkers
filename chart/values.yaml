@@ -14,9 +14,12 @@ networkPolicy:
 # Optional credentials for private images. Public packages need none.
 # imagePullSecret: zot-pull-secret
 
-env:
-  AUTH_MODE: invite
-  ENABLE_COMPUTER: "true"
-  ENABLE_DEMO: "true"
-  SPECTATOR_MODE: invite
-  ALLOW_SELF_PLAY: "false"
+# Application settings; README.md documents the matching environment variables.
+authMode: invite
+rules: english-default
+spectatorMode: invite
+enableMatchmaking: true
+enableComputer: true
+enableDemo: true
+enableLocalPlay: false
+allowSelfPlay: false
