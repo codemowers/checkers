@@ -11,7 +11,7 @@ main { width:100vw; min-height:100vh; position:relative; overflow:hidden; transi
 /* Dragging to turn the table starts over the chrome as often as not, and links
    and label text are draggable by default: without this the brand and the
    buttons come away as drag ghosts mid-gesture. */
-header,footer,.status-card,.waiting,button { user-select:none; -webkit-user-drag:none; }
+header,footer,.game-status,.game-choices,.waiting,button { user-select:none; -webkit-user-drag:none; }
 .brand,.brand * { -webkit-user-drag:none; }
 .name-prompt input { user-select:text; }
 /* Two signs on the far wall, out of shot. They buzz out of step with each other. */
@@ -50,11 +50,11 @@ header { position:absolute; z-index:10; inset:0 0 auto; min-height:76px; display
 .pieces i:last-child { background:#262b29; left:29px; top:22px; transform:rotate(8deg); }
 .loader { width:32px; height:1px; margin-top:25px; background:linear-gradient(90deg,transparent,var(--gold),transparent); animation:pulse 1.4s infinite; }
 @keyframes pulse { 50% { transform:scaleX(2); opacity:.45; } }
-.status-card { z-index:1; background:rgba(14,10,7,.42); border:1px solid rgba(240,205,150,.16); padding:12px 22px; backdrop-filter:blur(12px); min-width:min(420px,90vw); box-shadow:0 18px 50px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,214,160,.08); }
-.bottom-status { position:absolute; z-index:10; left:50%; bottom:40px; transform:translateX(-50%); margin:0; }
-.your-turn .status-card { border-color:rgba(103,184,126,.42); box-shadow:0 0 28px rgba(66,150,94,.13); }
-.opponent-turn .status-card { border-color:rgba(83,125,199,.38); box-shadow:0 0 28px rgba(51,91,164,.13); }
-.status-card>p { text-align:center; color:#eee4d1; font:italic 21px "Playfair Display",serif; margin:0; }
+.game-status { position:absolute; z-index:10; top:calc(var(--game-header-height,76px) + 10px); left:50%; transform:translateX(-50%); width:min(720px,calc(100% - 24px)); text-align:center; color:#eee4d1; font:italic 21px "Playfair Display",serif; margin:0; text-shadow:0 2px 3px #000,0 0 10px #000,0 0 24px #000; pointer-events:none; }
+.game-status:empty { display:none; }
+main:has(.board-canvas[data-overhead="true"]) .game-status { top:var(--board-status-bottom,calc(var(--game-header-height,76px) + 36px)); left:var(--board-status-x,50%); width:var(--board-status-width,min(720px,calc(100% - 24px))); transform:translate(-50%,-100%); }
+.game-choices { position:absolute; z-index:10; right:max(12px,env(safe-area-inset-right)); bottom:max(12px,env(safe-area-inset-bottom)); margin:0; width:calc(100% - 24px); max-width:calc(100% - 24px); max-height:45dvh; overflow-y:auto; }
+.game-choices:not(:has(button)) { display:none; }
 button { display:block; margin:16px auto 0; border:1px solid var(--gold); color:#f4e4c9; background:transparent; padding:10px 15px; font:600 14px "DM Sans"; letter-spacing:.1em; text-transform:uppercase; cursor:pointer; }
 .auth-redirect { min-height:100vh; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; letter-spacing:.06em; color:#c9c0af; font-size:13px; }
 .name-overlay { position:fixed; z-index:20; inset:0; display:grid; place-items:center; padding:20px; background:rgba(8,14,12,.82); backdrop-filter:blur(14px); }
@@ -73,17 +73,15 @@ button { display:block; margin:16px auto 0; border:1px solid var(--gold); color:
   .nav-match { gap:8px; }.nav-match>span { gap:5px; }.nav-match small { display:none; }
   .game-shell { padding:0; }
   .table-wrap { width:100vw; height:100vh; min-height:0; }
-  .status-card { margin:0; }
   .identity{font-size:14px}.online-dot{display:none}
 }
-@media (max-width:520px) { header{min-height:60px;padding:7px 10px}.table-wrap{height:100vh;min-height:0}.status-card{margin:0}.bottom-status{bottom:30px}.waiting{inset:8% 3%}.nav-match>span>span{max-width:72px;overflow:hidden;text-overflow:ellipsis}.nav-actions button{font-size:8px;padding:6px} }
+@media (max-width:520px) { header{min-height:60px;padding:7px 10px}.table-wrap{height:100vh;min-height:0}.waiting{inset:8% 3%}.nav-match>span>span{max-width:72px;overflow:hidden;text-overflow:ellipsis}.nav-actions button{font-size:8px;padding:6px} }
 @media (prefers-reduced-motion:reduce) { * { animation:none!important; } }
 
 .lobby-actions { display:flex; flex-wrap:wrap; justify-content:center; gap:10px; }
 .lobby-actions button { margin:4px 0; }
 button:disabled, select:disabled { opacity:.6; cursor:default; }
 @media (max-width:520px) { .lobby-actions button { font-size:10px; padding:9px; } }
-.status-card { max-width:calc(100vw - 24px); width:max-content; }
 @media (max-width:520px) {
   header { gap:7px; }
   .brand { font-size:10px; gap:4px; white-space:nowrap; }
@@ -106,7 +104,6 @@ main { min-height:100dvh; width:100%; }
 header > * { min-width:0; }
 .nav-actions { flex-wrap:wrap; }
 .nav-actions button { overflow-wrap:anywhere; }
-.bottom-status { width:min(640px,calc(100% - 24px)); min-width:0; bottom:max(12px,env(safe-area-inset-bottom)); max-height:45vh; max-height:45dvh; overflow-y:auto; }
 .lobby-actions { min-width:0; }
 .lobby-actions button { min-width:0; max-width:100%; white-space:normal; overflow-wrap:anywhere; flex:0 1 auto; }
 .render-fps { position:absolute; z-index:4; right:12px; bottom:max(4px,env(safe-area-inset-bottom)); font-size:11px; color:#c9c0af; pointer-events:none; }
@@ -118,11 +115,10 @@ header > * { min-width:0; }
   .nav-actions { grid-column:1 / -1; justify-content:center; gap:8px; }
   .identity,.nav-match { justify-content:flex-end; }
   .nav-actions button { font-size:11px; padding:7px 10px; }
-  .status-card { padding:10px 12px; }
-  .status-card > p { font-size:18px; }
+  .game-status { font-size:18px; }
 }
 @media (max-height:500px) {
-  .status-card > p { font-size:15px; }
+  .game-status { font-size:15px; }
   .lobby-actions { gap:6px; }
   .lobby-actions button { padding:7px; font-size:10px; }
 }
@@ -132,11 +128,13 @@ header > * { min-width:0; }
 
 .fullscreen-exit .fullscreen-error { top:calc(100% + 6px); }
 
-:fullscreen .bottom-status, :fullscreen .name-overlay, :fullscreen .render-fps, :fullscreen .fullscreen-error { display:none; }
+:fullscreen .game-status, :fullscreen .game-choices, :fullscreen .name-overlay, :fullscreen .render-fps, :fullscreen .fullscreen-error { display:none; }
 
 /* Prefer one action row; wrap naturally when the viewport cannot fit it. */
-.bottom-status { width:max-content; min-width:min(420px,calc(100% - 24px)); max-width:calc(100% - 24px); }
 .lobby-actions .lobby-actions { display:contents; }
+.game-choices { justify-content:center; align-items:center; flex-wrap:nowrap; }
+.game-choices[data-stacked="true"] { flex-direction:column; }
+.game-choices button { flex-shrink:0; }
 @media (max-width:1100px) {
   header { grid-template-columns:minmax(0,1fr) auto; }
   header .brand { display:none; }
@@ -159,4 +157,18 @@ header { padding-inline:max(60px,clamp(22px,5vw,72px)); }
   .nav-match .anonymous-avatar, .nav-match .player-avatar { width:22px; height:22px; font-size:20px; }
   .nav-match>span { gap:3px; }
   .nav-match { gap:4px; }
+}
+
+/* Choices sit just under the header above the drink on wide screens; the
+   status stays top centre, narrowed so it never runs underneath them. */
+@media (orientation:landscape) {
+  .game-choices {
+    justify-content:flex-end; align-items:flex-end;
+    left:auto; right:max(12px,env(safe-area-inset-right));
+    top:calc(var(--game-header-height,76px) + 12px); bottom:auto;
+    transform:none; width:clamp(240px,25vw,340px); min-width:0;
+    max-width:calc(100% - 24px);
+    max-height:calc(100dvh - var(--game-header-height,76px) - 24px);
+  }
+  main:has(.game-choices button) .game-status { width:min(720px,calc(100% - 2 * (clamp(240px,25vw,340px) + 24px))); }
 }

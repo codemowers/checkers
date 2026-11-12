@@ -272,13 +272,18 @@ function CameraRig({ autoOrbit = false }: { autoOrbit?: boolean }) {
   return <PerspectiveCamera ref={camera} makeDefault position={position} near={0.5} far={80} fov={compact ? 47 : 43} />;
 }
 
-function TableControls({ autoOrbit = false, orbitPaused = false, seatAngle, calm }: { autoOrbit?: boolean; orbitPaused?: boolean; seatAngle: { current: number }; calm: boolean }) {
+function TableControls({ autoOrbit = false, orbitPaused = false, seatAngle, calm, overhead, pieceDrag }: { autoOrbit?: boolean; orbitPaused?: boolean; seatAngle: { current: number }; calm: boolean; overhead: boolean; pieceDrag: { current: boolean } }) {
   const controls = useRef<OrbitControlsImpl>(null);
   const { camera, gl, size } = useThree();
   /** Wheel zoom, on top of the fit. 1 is the whole board; above that, closer in. */
   const closeness = useRef(1);
   const previousAngle = useRef(seatAngle.current);
   const restingTilt = useRef<number | undefined>(undefined);
+  type FrameArea = { left: number; top: number; right: number; bottom: number };
+  const frameArea = useRef<FrameArea | null>(null);
+  const targetArea = useRef<FrameArea | null>(null);
+  /** Canvas-space layout around the board: the band under the header, and the choice buttons to keep clear of. */
+  const layout = useRef<{ top: number; statusHeight: number; choices: FrameArea | null }>({ top: 12, statusHeight: 0, choices: null });
   useFrame((_, delta) => {
     const control = controls.current;
     if (control) {
@@ -290,36 +295,130 @@ function TableControls({ autoOrbit = false, orbitPaused = false, seatAngle, calm
         control.update();
         if (calm || angle === 0 || angle === Math.PI) restingTilt.current = undefined;
       }
-      control.enabled = restingTilt.current === undefined;
+      control.enabled = restingTilt.current === undefined && !pieceDrag.current;
       previousAngle.current = angle;
     }
     // Keep the slow demo orbit consistent across display refresh rates.
     if (autoOrbit && controls.current) controls.current.autoRotateSpeed = 0.25 * Math.min(delta, 0.1) * 60;
+    const current = frameArea.current;
+    const target = targetArea.current;
+    if (current && target) {
+      let changed = false;
+      for (const edge of ["left", "top", "right", "bottom"] as const) {
+        if (current[edge] === target[edge]) continue;
+        current[edge] = calm || Math.abs(current[edge] - target[edge]) < 0.1
+          ? target[edge]
+          : THREE.MathUtils.damp(current[edge], target[edge], 6, Math.min(delta, 0.1));
+        changed = true;
+      }
+      if (changed) frameBoard();
+    }
   });
   const frameBoard = useCallback(() => {
     if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    camera.clearViewOffset();
     camera.zoom = 1;
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld();
     const fullscreen = !!document.fullscreenElement?.contains(gl.domElement);
-    // Fullscreen fits the eight-unit playing grid; the wooden rim may clip.
-    const halfWidth = fullscreen ? 4.03 : 8.2;
-    const halfDepth = fullscreen ? 4.03 : 5;
-    let extent = 0;
+    const zoomScale = overhead ? 1 : closeness.current;
+    // Locked overhead views fit the playing grid tightly, including outside fullscreen.
+    // The outer wooden surround can extend past the available area.
+    const halfWidth = fullscreen || overhead ? 4.03 : 4.7;
+    const halfDepth = fullscreen || overhead ? 4.03 : 4.7;
+    const bounds = new THREE.Box2();
     for (const x of [-halfWidth, halfWidth]) for (const y of [-0.4, 0.9]) for (const z of [-halfDepth, halfDepth]) {
       const corner = new THREE.Vector3(x, y, z);
       if (fullscreen) corner.applyAxisAngle(THREE.Object3D.DEFAULT_UP, seatAngle.current);
       corner.project(camera);
-      extent = Math.max(extent, Math.abs(corner.x), Math.abs(corner.y));
+      bounds.expandByPoint(new THREE.Vector2(corner.x, corner.y));
     }
-    camera.zoom = ((fullscreen ? 0.995 : 0.9) / extent) * closeness.current;
+    if (fullscreen) {
+      const extent = Math.max(Math.abs(bounds.min.x), Math.abs(bounds.max.x), Math.abs(bounds.min.y), Math.abs(bounds.max.y));
+      camera.zoom = (0.995 / extent) * zoomScale;
+    } else {
+      const span = bounds.getSize(new THREE.Vector2());
+      const center = bounds.getCenter(new THREE.Vector2());
+      const fit = (area: FrameArea) => Math.min(2 * (area.right - area.left) / (size.width * span.x), 2 * (area.bottom - area.top) / (size.height * span.y));
+      // The buttons are a rectangle, not a column: try the board beside, above
+      // and below them and keep whichever placement lets it grow largest.
+      const whole = { left: 12, top: layout.current.top, right: size.width - 12, bottom: size.height - 12 };
+      const choices = layout.current.choices;
+      const areas = choices ? [
+        { ...whole, top: Math.max(whole.top, choices.bottom + (overhead ? layout.current.statusHeight : 0)) },
+        { ...whole, bottom: Math.min(whole.bottom, choices.top) },
+        { ...whole, right: Math.min(whole.right, choices.left) },
+        { ...whole, left: Math.max(whole.left, choices.right) },
+      ].filter(area => area.right - area.left > 1 && area.bottom - area.top > 1) : [whole];
+      targetArea.current = areas.reduce((best, area) => fit(area) > fit(best) ? area : best, areas[0] ?? whole);
+      // First reveal is already fitted; later layout changes ease from here.
+      frameArea.current ??= { ...targetArea.current };
+      const { left, top, right, bottom } = frameArea.current;
+      const width = Math.max(1, right - left);
+      const height = Math.max(1, bottom - top);
+      camera.zoom = Math.min(2 * width / (size.width * span.x), 2 * height / (size.height * span.y)) * (overhead ? 0.995 : 0.96) * zoomScale;
+      const projectedHalfWidth = span.x * camera.zoom * size.width / 4;
+      const availableCenterX = (left + right) / 2;
+      const horizontalSlack = Math.max(0, width / 2 - projectedHalfWidth);
+      // Prefer the screen centre; shift only as far as needed to clear choices.
+      const boardCenterX = THREE.MathUtils.clamp(size.width / 2,
+        availableCenterX - horizontalSlack, availableCenterX + horizontalSlack);
+      camera.setViewOffset(size.width, size.height,
+        size.width / 2 + center.x * camera.zoom * size.width / 2 - boardCenterX,
+        size.height / 2 - center.y * camera.zoom * size.height / 2 - (top + bottom) / 2,
+        size.width, size.height);
+      if (overhead) {
+        // End the text just outside the playing grid, over the upper wooden rim.
+        // Longer messages grow upwards rather than covering the top row of squares.
+        const rim = new THREE.Vector3(0, -0.005, -4.03).project(camera);
+        const main = gl.domElement.closest("main");
+        main?.style.setProperty("--board-status-x", `${boardCenterX}px`);
+        main?.style.setProperty("--board-status-bottom", `${(1 - rim.y) * size.height / 2 - 4}px`);
+        main?.style.setProperty("--board-status-width", `${Math.max(1, Math.min(720, projectedHalfWidth * 2 - 24))}px`);
+      }
+    }
     camera.updateProjectionMatrix();
-  }, [camera, gl, seatAngle]);
+  }, [camera, gl, seatAngle, size.width, size.height, overhead]);
+  const measureControls = useCallback(() => {
+    const main = gl.domElement.closest("main");
+    if (!main) return;
+    const canvasRect = gl.domElement.getBoundingClientRect();
+    const header = main.querySelector("header")?.getBoundingClientRect();
+    const headerHeight = header ? Math.max(0, header.bottom - canvasRect.top) : 0;
+    main.style.setProperty("--game-header-height", `${headerHeight}px`);
+    const status = main.querySelector(".game-status")?.getBoundingClientRect();
+    // Only the buttons themselves block the board, not the empty rest of their row.
+    const buttons = [...main.querySelectorAll(".game-choices button")].map(button => button.getBoundingClientRect()).filter(rect => rect.width && rect.height);
+    const choices = buttons.length ? {
+      left: Math.min(...buttons.map(rect => rect.left)) - canvasRect.left - 12,
+      top: Math.min(...buttons.map(rect => rect.top)) - canvasRect.top - 12,
+      right: Math.max(...buttons.map(rect => rect.right)) - canvasRect.left + 12,
+      bottom: Math.max(...buttons.map(rect => rect.bottom)) - canvasRect.top + 12,
+    } : null;
+    // Leave room for rim text above the tightly fitted overhead playing grid.
+    const top = (overhead ? headerHeight + (status?.height ?? 0) : Math.max(headerHeight, status?.height ? status.bottom - canvasRect.top : 0)) + 12;
+    layout.current = { top, statusHeight: status?.height ?? 0, choices };
+    frameBoard();
+  }, [frameBoard, gl, overhead]);
   useEffect(() => {
-    document.addEventListener("fullscreenchange", frameBoard);
-    return () => document.removeEventListener("fullscreenchange", frameBoard);
-  }, [frameBoard]);
-  useLayoutEffect(frameBoard, [frameBoard, size.width, size.height]);
+    document.addEventListener("fullscreenchange", measureControls);
+    return () => document.removeEventListener("fullscreenchange", measureControls);
+  }, [measureControls]);
+  useLayoutEffect(measureControls, [measureControls]);
+  useEffect(() => {
+    const main = gl.domElement.closest("main");
+    if (!main) return;
+    const resize = new ResizeObserver(measureControls);
+    const observeControls = () => {
+      resize.disconnect();
+      main.querySelectorAll("header, .game-status, .game-choices").forEach(element => resize.observe(element));
+      measureControls();
+    };
+    const mutations = new MutationObserver(observeControls);
+    mutations.observe(main.querySelector(".game-choices") ?? main, { childList: true, subtree: true });
+    observeControls();
+    return () => { resize.disconnect(); mutations.disconnect(); };
+  }, [measureControls, gl]);
 
   // Dollying would be undone by the fit on the next frame, so the wheel scales
   // the fit itself. Non-passive, or the browser claims the gesture first.
@@ -327,12 +426,13 @@ function TableControls({ autoOrbit = false, orbitPaused = false, seatAngle, calm
     const canvas = gl.domElement;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
+      if (overhead) return;
       closeness.current = THREE.MathUtils.clamp(closeness.current * Math.pow(0.999, event.deltaY), 0.8, 2.75);
       frameBoard();
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
-  }, [frameBoard, gl]);
+  }, [frameBoard, gl, overhead]);
 
   function snapOverhead() {
     const control = controls.current;
@@ -346,7 +446,7 @@ function TableControls({ autoOrbit = false, orbitPaused = false, seatAngle, calm
     control.update();
     frameBoard();
   }
-  return <OrbitControls ref={controls} makeDefault enableDamping={false} enablePan={false} enableZoom={false} minPolarAngle={OVERHEAD} maxPolarAngle={1.05} autoRotate={autoOrbit && !orbitPaused} autoRotateSpeed={0.25} minAzimuthAngle={autoOrbit ? -Infinity : -0.25} maxAzimuthAngle={autoOrbit ? Infinity : 0.25} onChange={frameBoard} onEnd={snapOverhead} mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }} touches={{ ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE }} />;
+  return <OrbitControls ref={controls} makeDefault enableDamping={false} enablePan={false} enableZoom={false} minPolarAngle={OVERHEAD} maxPolarAngle={1.05} autoRotate={autoOrbit && !orbitPaused} autoRotateSpeed={0.25} minAzimuthAngle={autoOrbit ? -Infinity : -0.25} maxAzimuthAngle={autoOrbit ? Infinity : 0.25} onChange={frameBoard} onEnd={snapOverhead} mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }} touches={{ ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE }} />;
 }
 
 /**
@@ -722,12 +822,13 @@ function RaisedShadow({ body, caster, cell, ground = 0.049 }: { body: React.RefO
 }
 
 type Landing = { origin: [number, number, number]; promoted?: boolean };
-function Piece({ cameraGesture, size, piece, position, selected, required, canSelect, flipped, calm, landing, onSelect, onDrop }: {
-  cameraGesture: { current: boolean }; size: number; piece: number; position: Position; selected: boolean; required: boolean; canSelect: boolean;
+function Piece({ cameraGesture, pieceDrag, size, piece, position, selected, required, canSelect, flipped, calm, landing, onSelect, onDrop }: {
+  cameraGesture: { current: boolean }; pieceDrag: { current: boolean }; size: number; piece: number; position: Position; selected: boolean; required: boolean; canSelect: boolean;
   flipped: boolean; calm: boolean; landing?: Landing; onSelect: (p: Position) => void;
   onDrop: (from: Position, to: Position, release: [number, number, number]) => boolean;
 }) {
   const [drag, setDrag] = useState<THREE.Vector3>();
+  const controls = useThree(state => state.controls) as OrbitControlsImpl | null;
   const boardPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), -PIECE_REST), []);
   const body = useRef<THREE.Group>(null);
   const caster = useRef<THREE.Mesh>(null);
@@ -776,6 +877,9 @@ function Piece({ cameraGesture, size, piece, position, selected, required, canSe
   function down(event: ThreeEvent<PointerEvent>) {
     if (cameraGesture.current || !canSelect || event.button !== 0) return;
     event.stopPropagation();
+    // Dragging the board turns the camera; holding a piece must not.
+    pieceDrag.current = true;
+    if (controls) controls.enabled = false;
     (event.target as Element).setPointerCapture(event.pointerId);
     onSelect(position);
     setDrag(point(event)?.setY(0.72));
@@ -785,6 +889,7 @@ function Piece({ cameraGesture, size, piece, position, selected, required, canSe
     if (drag) { event.stopPropagation(); const next = point(event); if (next) setDrag(next.setY(0.72)); }
   }
   function up(event: ThreeEvent<PointerEvent>) {
+    pieceDrag.current = false;
     if (!drag) return;
     event.stopPropagation();
     (event.target as Element).releasePointerCapture(event.pointerId);
@@ -799,6 +904,7 @@ function Piece({ cameraGesture, size, piece, position, selected, required, canSe
     setDrag(undefined);
   }
   return <><group ref={body} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={() => {
+    pieceDrag.current = false;
     if (drag) motion.current = { from: drag.clone(), progress: 0 };
     setDrag(undefined);
   }}>
@@ -845,7 +951,7 @@ function TargetShadow({ at, calm, size }: { at: Position; calm: boolean; size: n
   </mesh>;
 }
 
-function Table({ game: target, player, viewPlayer = player, onMove, disabled, offering = false, cameraGesture, wood, seatAngle, smokeLevel }: Props & { cameraGesture: { current: boolean }; wood: THREE.Texture | null; seatAngle: { current: number }; smokeLevel: number }) {
+function Table({ game: target, player, viewPlayer = player, onMove, disabled, offering = false, cameraGesture, pieceDrag, wood, seatAngle, smokeLevel }: Props & { cameraGesture: { current: boolean }; pieceDrag: { current: boolean }; wood: THREE.Texture | null; seatAngle: { current: number }; smokeLevel: number }) {
   const calmMotion = useCalm();
   const { frame, animating: playingMove } = useBoardPlayback(target, calmMotion);
   const table = useRef<THREE.Group>(null);
@@ -970,7 +1076,7 @@ function Table({ game: target, player, viewPlayer = player, onMove, disabled, of
           <boxGeometry args={[cell - 0.01, 0.06, cell - 0.01]} />
           <SurfaceMaterial color={tone} cheapColor={dark ? "#b49a7c" : undefined} cheapEmissive={dark ? "#24180f" : undefined} roughness={0.62} envMapIntensity={0.12} map={dark ? wood : undefined} />
         </mesh>
-        {piece > 0 && <Piece cameraGesture={cameraGesture} size={size} piece={piece} position={position} selected={same(selected, position)} required={mustMoveThisPiece} canSelect={canSelect} flipped={viewPlayer === 1} calm={calmMotion} landing={arriving && same(arriving.to, position) ? landing : undefined} onSelect={setSelected} onDrop={drop} />}
+        {piece > 0 && <Piece cameraGesture={cameraGesture} pieceDrag={pieceDrag} size={size} piece={piece} position={position} selected={same(selected, position)} required={mustMoveThisPiece} canSelect={canSelect} flipped={viewPlayer === 1} calm={calmMotion} landing={arriving && same(arriving.to, position) ? landing : undefined} onSelect={setSelected} onDrop={drop} />}
       </group>;
     }))}
   </group>;
@@ -1013,7 +1119,7 @@ function BarRoom({ calm, theirs, smokeLevel, overhead }: { calm: boolean; theirs
       <SurfaceMaterial physical ref={cloth} map={feltTexture()} color="#17693b" roughness={0.95} metalness={0} envMapIntensity={0.06} sheen={0.6} sheenColor="#4f9c6a" sheenRoughness={0.75} />
     </mesh>
     {!overhead && <Pendant calm={calm} />}
-    {smokeLevel < 4 && <DustMotes calm={calm} />}
+    {!overhead && smokeLevel < 4 && <DustMotes calm={calm} />}
     {!overhead && smokeCounts[smokeLevel] > 0 && <Smoke calm={calm} count={smokeCounts[smokeLevel]} />}
   </>;
 }
@@ -1062,17 +1168,24 @@ export default function WebGLBoard(props: Props) {
   const seatAngle = useRef(props.offering ? 0 : (props.viewPlayer ?? props.player) === 1 ? Math.PI : 0);
   const touches = useRef(new Set<number>());
   const cameraGesture = useRef(false);
-  const releaseTouch = (event: React.PointerEvent) => { touches.current.delete(event.pointerId); };
+  const pieceDrag = useRef(false);
+  const pressed = useRef<{ x: number; y: number } | undefined>(undefined);
+  const releaseTouch = (event: React.PointerEvent) => { touches.current.delete(event.pointerId); if (!touches.current.size) pressed.current = undefined; };
   const turn = props.game.you === null || props.game.status !== "playing" ? "idle" : props.game.turn === props.player ? "yours" : "theirs";
   if (wood === undefined) return <div className="board-loading" role="status">Setting the table…</div>;
   return <div className="board-canvas" data-effects-level={performance.level} data-overhead={overhead} onContextMenu={(event) => event.preventDefault()}
     onPointerDownCapture={(event) => {
-      if (!touches.current.size) cameraGesture.current = false;
+      if (!touches.current.size) { cameraGesture.current = false; pressed.current = { x: event.clientX, y: event.clientY }; }
       if (event.pointerType !== "touch") return;
       // Latch until the next gesture, so lifting either finger cannot drop a
       // piece that the first finger happened to touch before the second landed.
       touches.current.add(event.pointerId);
       if (touches.current.size >= 2) cameraGesture.current = true;
+    }}
+    onPointerMoveCapture={(event) => {
+      // A drag across the board turns the camera; it must not also land as a tap on a square.
+      const start = pressed.current;
+      if (start && !pieceDrag.current && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 6) cameraGesture.current = true;
     }}
     onPointerUpCapture={releaseTouch} onPointerCancelCapture={releaseTouch}>
     <Canvas shadows="percentage" dpr={performance.level >= 5 ? 1 : [1, 1.75]} gl={{ antialias: true, alpha: true }} onCreated={({ gl }) => { gl.toneMapping = THREE.ACESFilmicToneMapping; gl.toneMappingExposure = 1.04; }}>
@@ -1090,8 +1203,8 @@ export default function WebGLBoard(props: Props) {
       <pointLight position={[2.6, 1.1, 5.2]} intensity={7} distance={13} decay={2} color="#ffb673" />
       <NeonWash calm={calm} />
       <BarRoom calm={calm} theirs={turn === "theirs"} smokeLevel={performance.level} overhead={overhead} />
-      <Table {...props} cameraGesture={cameraGesture} wood={wood} seatAngle={seatAngle} smokeLevel={overhead ? 3 : performance.level} />
-      <TableControls autoOrbit={props.autoOrbit} orbitPaused={props.orbitPaused} seatAngle={seatAngle} calm={calm} />
+      <Table {...props} cameraGesture={cameraGesture} pieceDrag={pieceDrag} wood={wood} seatAngle={seatAngle} smokeLevel={overhead ? 3 : performance.level} />
+      <TableControls autoOrbit={props.autoOrbit} orbitPaused={props.orbitPaused} seatAngle={seatAngle} calm={calm} overhead={overhead} pieceDrag={pieceDrag} />
       {/* The bulb, its rim and the sparks in the beam are the only things over
           threshold, so the glow lands where a camera would blow out. */}
       {performance.level < 4 && <EffectComposer multisampling={4}>

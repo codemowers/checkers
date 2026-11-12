@@ -65,13 +65,13 @@ digraph MenuFlow {
     host -> invite_copy [label="Local feature disabled: submit opening\nPrivate invitation selected; table created"];
     guest -> to_play;
     scene_note [shape=note, style=filled, fillcolor="#f1f5f9", color="#94a3b8",
-      label="Presentation shared across lobby / offer / waiting / playing:\nPreload wood; show Setting the table… until ready.\nIf loading fails, use plain colours so play remains available.\nKeep the same canvas through transitions.\nFelt extends beyond view; broad lamp beam and soft ambient light.\nShadow maps on at every quality level; raised piece shadows widen and soften with height.\nLamp beam / bulb glow / restored bloom fade in; reduced motion is immediate.\nBoard and shadow turn together; camera rises then restores its tilt.\nAccept / Start a new game continue from the current orientation.\nReduced motion: snap to the seat without the turn or camera lift.\nStart at pixel ratio 1 with vertex-lit textures; reflections / bloom / dust / smoke off.\nSustained high FPS restores physical materials + reflections, then bloom / dust, then smoke.\nVisible FPS: 100 ms warm-up, then sample every 250 ms.\nThree consecutive samples at least 50 FPS: unlock one quality step in about 0.9 s.\nKeep unlocked features even if FPS drops or play / demo changes.\nRefresh tab: reset to pixel ratio 1 and simple materials; optional effects off.\nOverhead: skip lamp fixture / beam; smoke and steam off; keep lighting.\nTilt away: restore effects at current quality level.\nHidden tab / resume gap / view change: restart FPS samples.\nSame avatar / name / score component with colon separator, no colour chips in lobby, online, local and demo.\nFullscreen hides scores, FPS and dialogs; SVG film grain disabled.\nCompact header: hide brand, retain scores and login; narrow phones hide player names.\nShared top bar for lobby / local / online / spectators / demo.\nEqual left / right header margins; borderless fullscreen icon on right, after buttons; Quit game in status dialog.\nDialog buttons form a row when space permits; wrap and scroll within viewport."];
+      label="Presentation shared across lobby / offer / waiting / playing:\nPreload wood; show Setting the table… until ready.\nIf loading fails, use plain colours so play remains available.\nKeep the same canvas through transitions.\nFelt extends beyond view; broad lamp beam and soft ambient light.\nShadow maps on at every quality level; raised piece shadows widen and soften with height.\nLamp beam / bulb glow / restored bloom fade in; reduced motion is immediate.\nBoard and shadow turn together; camera rises then restores its tilt.\nAccept / Start a new game continue from the current orientation.\nReduced motion: snap to the seat without the turn or camera lift.\nStart at pixel ratio 1 with vertex-lit textures; reflections / bloom / dust / smoke off.\nSustained high FPS restores physical materials + reflections, then bloom / dust, then smoke.\nVisible FPS: 100 ms warm-up, then sample every 250 ms.\nThree consecutive samples at least 50 FPS: unlock one quality step in about 0.9 s.\nKeep unlocked features even if FPS drops or play / demo changes.\nRefresh tab: reset to pixel ratio 1 and simple materials; optional effects off.\nOverhead: skip lamp fixture / beam; dust, smoke and steam off; keep lighting.\nTilt away: restore effects at current quality level.\nHidden tab / resume gap / view change: restart FPS samples.\nSame avatar / name / score component with colon separator, no colour chips in lobby, online, local and demo.\nFullscreen hides scores, FPS and dialogs; SVG film grain disabled.\nCompact header: hide brand, retain scores and login; narrow phones hide player names.\nShared top bar for lobby / local / online / spectators / demo.\nEqual left / right header margins; borderless fullscreen icon on right, after buttons.\nHeader shows Quit game after Share game while seated in a waiting / playing online game or after the local opening.\nCoarse pointer or width <= 1024px: initial top view; otherwise tilted.\nStatus text: top centre below header; overhead: ends just above the board's upper rim.\nPortrait: choice buttons at bottom; fit board below header / status and above buttons.\nLandscape / desktop / laptop: choice buttons at top right just below header, above drink; status narrowed to clear them.\nDrag board (not a movable piece) / right-drag / two fingers: turn and tilt; drag suppresses square taps.\nTilted fit: playing squares only; wooden surround may clip. Overhead fit: tight to grid; wheel zoom off.\nBoard avoids the buttons' own rectangle: largest fit beside, above or below them; centred when it fits.\nResize / status / choice changes: ease board to new fit without remounting canvas; keep current tilt.\nChoice buttons ordered widest first; one row when it fits, otherwise a column; scroll within viewport."];
     to_play -> scene_note [style=invis];
   }
 
   subgraph cluster_wait {
     graph [label="2. Waiting host", color="#94a3b8", sortv=2];
-    waiting [label="Waiting as Red\nTable has no expiry", shape=oval, fillcolor="#dcfce7", color="#15803d"];
+    waiting [label="Waiting as Red\nTable has no expiry\nENABLE_LOCAL_PLAY=true: append Play black for local game.\nOtherwise: waiting message only", shape=oval, fillcolor="#dcfce7", color="#15803d"];
     waiting_event [label="What happens next?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
     invite_copy [label="Copy game URL\nClipboard write succeeds?", shape=diamond];
     invite_copied [label="Button: Link copied for 3 seconds"];
@@ -83,10 +83,9 @@ digraph MenuFlow {
     wait_quit [label="Delete table\nReturn to opening board", shape=oval, fillcolor="#fee2e2", color="#b91c1c"];
     waiting -> waiting_event;
     waiting_event -> invite_copy [label="Click Invite"];
-    waiting_event -> private_host [label="Public table: click Start new game\nWithdraw table; opt out"];
     waiting_event -> computer [label="Click Play against computer instead\nOnly shown if ENABLE_COMPUTER=true"];
     waiting_event -> human [label="Human claims seat\nafter accepting a link or match offer"];
-    waiting_event -> wait_quit [label="Click Quit game in dialog"];
+    waiting_event -> wait_quit [label="Click Quit game in header"];
     invite_copy -> invite_copied [label="Yes"];
     invite_copy -> invite_copy_failed [label="No"];
     invite_copied -> invite_return;
@@ -157,7 +156,7 @@ digraph MenuFlow {
     playing -> event;
     event -> share_copy [label="Click Share game\nOnly shown if SPECTATOR_MODE=invite"];
     event -> result [label="Game finishes"];
-    event -> quit [label="Click Quit game in dialog"];
+    event -> quit [label="Click Quit game in header"];
     event -> reconnect [label="Human opponent disconnects"];
     stream_retry [label="Keep board; show Reconnecting\nRetry stream every 1.5 seconds"];
     stream_snapshot [label="Game snapshot received?", shape=diamond, fillcolor="#fef3c7", color="#b45309"];
@@ -274,7 +273,7 @@ digraph MenuFlow {
     opening -> local_draft [label="Local feature enabled: Red opening"];
     local_draft -> local_choice;
     local_choice -> local_draft [label="Play Red: retain choices"];
-    local_draft -> local_reset [label="After Red opening: click Quit game"];
+    local_draft -> local_reset [label="After Red opening: click Quit game in header"];
     local_choice -> local_table [label="Play Black"];
     local_choice -> local_online [label="Online options"];
     local_online -> local_hide [label="No"];
@@ -286,7 +285,7 @@ digraph MenuFlow {
     local_publish -> to_play [label="Computer joins"];
     local_table -> local_action;
     local_action -> local_table [label="Legal move / capture continuation"];
-    local_action -> local_reset [label="Quit / Play again after result"];
+    local_action -> local_reset [label="Quit game in header, or Play again after result"];
     local_reset -> local_draft;
     waiting_event -> local_detach [label="Move Black: local feature enabled"];
     local_detach -> local_table [label="Yes: withdraw table, play Black locally"];

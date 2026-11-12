@@ -12,6 +12,7 @@ import { toPublicGame } from "../lib/public-game";
 import { InvalidMove, hasCapture, newGame } from "../lib/rules";
 import { useSignInVisibility } from "./sign-in-button";
 import { GameHeader } from "./game-header";
+import { GameControls } from "./game-controls";
 import { useServerConnection } from "../lib/use-server-connection";
 import { useLocalOpening } from "../lib/use-local-opening";
 import { localPlayCommitted } from "../lib/local-game";
@@ -485,6 +486,17 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
   </div>;
 
   const quitAction = (localStarted || (game?.you != null && game.status === "playing")) && <button onClick={() => void quit()}>Quit game</button>;
+  let statusText = message;
+  if (game) statusText = (!shareMessage?.copied && shareMessage?.text) || (waitingLocal ? "Waiting for an opponent. Play black for local game." : message);
+  else if (offer) statusText = `${offer.players[0].name} wants to play with you. Do you accept?`;
+  else if (localBoard) statusText = localMessage;
+  else if (waitingForOpponent) {
+    if (matchBusy) statusText = "Taking your seat…";
+    else if (openingChoice === "computer") statusText = "Make your opening move to play against the computer.";
+    else if (!enableMatchmaking || openingChoice === "invite") statusText = "Make your opening move, then share the game link to invite someone.";
+    else statusText = "Looking for a waiting opponent. Make an opening move to start your own game.";
+  }
+  statusText = matchError || statusText;
 
   if (enableDemo && demo) return <Demo ruleset={ruleset} signInUrl={showSignIn ? signInUrl : undefined} onExit={() => setDemo(false)} />;
 
@@ -492,6 +504,7 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
     <GameHeader game={scoreGame} local={!!localBoard} playerAvatar={playerAvatar} signInUrl={showSignIn ? signInUrl : undefined}>
       {!localBoard && !watching && (!gameId || game?.you != null) && identityActions}
       {serverConnected && game?.you != null && !game.waiting && allowSpectators && <button aria-live="polite" onClick={() => void share()}>{shareMessage?.copied ? "Link copied" : "Share game"}</button>}
+      {quitAction}
     </GameHeader>
 
     <section className="game-shell">
@@ -504,28 +517,17 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
       </div>
     </section>
 
-    {game && <div className="status-card bottom-status">
-      <p aria-live="polite">{matchError || (!shareMessage?.copied && shareMessage?.text) || (waitingLocal ? "Waiting for an opponent." : message)}</p>
-      <div className="lobby-actions">
-      {game.waiting && game.you === null && invitationActions}
-      {serverConnected && game.waiting && game.you === 0 && <>
-        <button aria-live="polite" onClick={() => void share()}>{shareMessage?.copied ? "Link copied" : "Invite"}</button>
-        {enableMatchmaking && game.matchmaking && <button disabled={matchBusy} onClick={() => void quit("invite")}>Start new game</button>}
-        {enableComputer && <button disabled={matchBusy} onClick={() => void joinTable("computer")}>{matchBusy ? "Joining…" : "Play against computer instead"}</button>}
+    <GameControls message={statusText}>
+      {game && <>
+        {game.waiting && game.you === null && invitationActions}
+        {serverConnected && game.waiting && game.you === 0 && <>
+          <button aria-live="polite" onClick={() => void share()}>{shareMessage?.copied ? "Link copied" : "Invite"}</button>
+          {enableComputer && <button disabled={matchBusy} onClick={() => void joinTable("computer")}>{matchBusy ? "Joining…" : "Play against computer instead"}</button>}
+        </>}
+        {game.status === "finished" && !watching && <button onClick={() => participate()}>Play again</button>}
       </>}
-      {game.status === "finished" && !watching && <button onClick={() => participate()}>Play again</button>}
-      {quitAction}
-      </div>
-    </div>}
-
-    {offer && <div className="status-card bottom-status">
-      <p aria-live="polite">{matchError || `${offer.players[0].name} wants to play with you. Do you accept?`}</p>
-      <div className="lobby-actions">{invitationActions}{quitAction}</div>
-    </div>}
-
-    {waitingForOpponent && <div className="status-card bottom-status">
-      <p aria-live="polite">{matchError || (localBoard ? localMessage : matchBusy ? "Taking your seat…" : openingChoice === "computer" ? "Make your opening move to play against the computer." : !enableMatchmaking || openingChoice === "invite" ? "Make your opening move, then share the game link to invite someone." : "Looking for a waiting opponent. Make an opening move to start your own game.")}</p>
-      <div className="lobby-actions">
+      {offer && invitationActions}
+      {waitingForOpponent && <>
         {rulesConfig.allowSelection && (!localBoard || localBoard.revision === 1) && <button type="button" disabled={matchBusy} onClick={() => { const next = ruleset === "english" ? "international" : "english"; setRuleset(next); if (enableLocalPlay) opening.reset(next); }}>
           Switch to {ruleset === "english" ? "international" : "English"} rules
         </button>}
@@ -533,11 +535,9 @@ export default function GameRoom({ initialGameId, playerName, playerAvatar, anon
         {serverConnected && (enableLocalPlay || openingChoice !== "invite") && <button disabled={matchBusy} onClick={() => participate("invite")}>Invite someone</button>}
         {serverConnected && enableMatchmaking && <button disabled={matchBusy} onClick={() => openingChoice === "find" ? participate("invite", true) : participate("find")}>{openingChoice === "find" ? "Start new game" : "Find opponent"}</button>}
         {serverConnected && enableComputer && localBoard?.turn === 1 && <button disabled={matchBusy} onClick={() => participate("computer")}>Play against computer</button>}
-        {quitAction}
-      </div>
-    </div>}
-
-    {localPlaying && <div className="status-card bottom-status"><p aria-live="polite">{matchError || localMessage}</p><div className="lobby-actions">{quitAction}{localBoard?.status === "finished" && <button onClick={() => { opening.reset(ruleset); participate("local"); }}>Play again</button>}</div></div>}
+      </>}
+      {localPlaying && localBoard?.status === "finished" && <button onClick={() => { opening.reset(ruleset); participate("local"); }}>Play again</button>}
+    </GameControls>
     {!watching && nameEditor}
 
   </main>;

@@ -31,10 +31,10 @@ Open <http://localhost:48327>. Compose enables anonymous and local play with dis
 
 ## Playing
 
-- **Find an opponent:** the lobby receives offers without an opening move. **Accept** claims Black; an offer does not reserve the seat. On the connected home page with matchmaking enabled, Red's opening creates a public waiting table, including when local play is enabled. **Start new game** opts out of matchmaking; **Find opponent** re-enables it.
+- **Find an opponent:** the lobby receives offers without an opening move. **Accept** claims Black; an offer does not reserve the seat. On the connected home page with matchmaking enabled, Red's opening creates a public waiting table, including when local play is enabled. Before opening, **Start new game** opts out of matchmaking; **Find opponent** re-enables it. After opening, **Quit game** withdraws the waiting table and returns to the opening board.
 - **Invite someone:** creates a private table from Red's opening and copies its URL. Choosing it before the opening creates the table after that move. Private tables stay out of matchmaking. **Invite** retries copying; the address bar also contains the link.
 - **Computer:** answers Red's opening when chosen. Online computer games require a server connection.
-- **Local play:** enable `ENABLE_LOCAL_PLAY` and open `/local`, or play Black on your waiting table to withdraw it and continue locally. A concurrent seat claim prevents conversion. On `/local`, offline, or with matchmaking disabled, the opening stays in the browser until an online choice is selected. Black's first move commits to local play. Refreshing discards local games.
+- **Local play:** enable `ENABLE_LOCAL_PLAY` and open `/local`, or play Black on your waiting table to withdraw it and continue locally. The waiting message adds **Play black for local game.** when local play is enabled. A concurrent seat claim prevents conversion. On `/local`, offline, or with matchmaking disabled, the opening stays in the browser until an online choice is selected. Black's first move commits to local play. Refreshing discards local games.
 - **Watch:** game links open as spectators by default; **Accept** takes an open Black seat. With spectating disabled, visitors automatically attempt to join. **Share game** copies a spectator link during play.
 - **Finish:** **Quit game** ends an online table for both players or resets local play. **Play again** returns to the opening board. **Watch demo** runs a browser-only computer match with pause, resume and exit controls.
 
@@ -44,7 +44,9 @@ Online choices appear only while the server and Redis connection is live. Game s
 
 Drag a piece, or select it and tap a highlighted square. Captures are mandatory; International rules require the longest sequence. **Spacebar** or **double-click** plays the only legal move, one jump at a time. Spacebar retains normal behavior in form controls.
 
-Right-drag or use two fingers to tilt the camera; scroll to zoom. Releasing near overhead snaps to top-down. **Fullscreen** hides the header and dialogs, fits the playing grid to the screen and attempts to lock the current orientation. Use the upper-right exit icon to restore controls.
+Mobile and narrow screens start in top view. The board fits the space below the header and clear of the action dialog: buttons stay at the bottom in portrait; landscape, desktop and laptop layouts place them just below the header at the top right, above the drink. The board takes the largest space beside, above or below the buttons, staying centred when it fits. Framing eases with resizing and button changes without remounting the canvas.
+
+Drag the board (anywhere except a movable piece), right-drag or use two fingers to turn and tilt the camera; scroll to zoom. Releasing near overhead snaps to top-down, disabling dust, smoke and steam; tilting away restores effects at the current quality level. **Fullscreen** hides the header and dialogs, fits the playing grid to the screen and attempts to lock the current orientation. Use the upper-right exit icon to restore controls.
 
 Rules can be switched before the opening when `RULES` allows selection. The canvas stays mounted through lobby, offers and online play. The wood texture loads before reveal, with plain colours as a fallback. Rendering starts with simple effects and adds quality after sustained 50 FPS; unlocked quality persists until refresh. Reduced motion skips seat transitions and effect fades.
 

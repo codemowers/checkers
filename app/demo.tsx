@@ -7,6 +7,7 @@ import { type Ruleset } from "../lib/rulesets";
 import { toPublicGame } from "../lib/public-game";
 import { COMPUTER_PAIRS, computerPair } from "../lib/computer-names";
 import { GameHeader } from "./game-header";
+import { GameControls } from "./game-controls";
 import type { Game } from "../lib/types";
 
 const Board = dynamic(() => import("./webgl-board"), { ssr: false });
@@ -73,14 +74,11 @@ export default function Demo({ ruleset, onExit, signInUrl }: { ruleset: Ruleset;
     <section className="game-shell"><div className="table-wrap">
       <Board game={toPublicGame(game, null)} player={0} onMove={ignoreMove} disabled autoOrbit orbitPaused={paused} />
     </div></section>
-    <div className="status-card bottom-status">
-      <p aria-live="polite">{status}</p>
-      <div className="lobby-actions">
+    <GameControls message={status}>
       {finished || error
         ? <button onClick={restart}>Watch another game</button>
         : <button onClick={() => setPaused((value) => !value)}>{paused ? "Resume demo" : "Pause demo"}</button>}
       <button onClick={onExit}>Back to play</button>
-      </div>
-    </div>
+    </GameControls>
   </main>;
 }
